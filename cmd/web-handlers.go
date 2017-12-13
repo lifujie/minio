@@ -19,7 +19,6 @@ package cmd
 import (
 	"archive/zip"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -36,6 +35,9 @@ import (
 	"github.com/gorilla/rpc/v2/json2"
 	"github.com/minio/minio-go/pkg/policy"
 	"github.com/minio/minio/browser"
+	"github.com/minio/minio/pkg/auth"
+	"github.com/minio/minio/pkg/errors"
+	"github.com/minio/minio/pkg/hash"
 )
 
 // WebGenericArgs - empty struct for calls that don't accept arguments
@@ -124,9 +126,9 @@ func (web *webAPIHandlers) MakeBucket(r *http.Request, args *MakeBucketArgs, rep
 		return toJSONError(errAuthentication)
 	}
 
-	// Check if bucket is a reserved bucket name.
-	if isMinioMetaBucket(args.BucketName) || isMinioReservedBucket(args.BucketName) {
-		return toJSONError(errReservedBucket)
+	// Check if bucket is a reserved bucket name or invalid.
+	if isReservedOrInvalidBucket(args.BucketName) {
+		return toJSONError(errInvalidBucketName)
 	}
 
 	bucketLock := globalNSMutex.NewNSLock(args.BucketName, "")
@@ -135,7 +137,7 @@ func (web *webAPIHandlers) MakeBucket(r *http.Request, args *MakeBucketArgs, rep
 	}
 	defer bucketLock.Unlock()
 
-	if err := objectAPI.MakeBucketWithLocation(args.BucketName, serverConfig.GetRegion()); err != nil {
+	if err := objectAPI.MakeBucketWithLocation(args.BucketName, globalServerConfig.GetRegion()); err != nil {
 		return toJSONError(err, args.BucketName)
 	}
 
@@ -367,7 +369,7 @@ func (web webAPIHandlers) GenerateAuth(r *http.Request, args *WebGenericArgs, re
 	if !isHTTPRequestValid(r) {
 		return toJSONError(errAuthentication)
 	}
-	cred := mustGetNewCredential()
+	cred := auth.MustGetNewCredentials()
 	reply.AccessKey = cred.AccessKey
 	reply.SecretKey = cred.SecretKey
 	reply.UIVersion = browser.UIVersion
@@ -398,7 +400,7 @@ func (web *webAPIHandlers) SetAuth(r *http.Request, args *SetAuthArgs, reply *Se
 		return toJSONError(errChangeCredNotAllowed)
 	}
 
-	creds, err := createCredential(args.AccessKey, args.SecretKey)
+	creds, err := auth.CreateCredentials(args.AccessKey, args.SecretKey)
 	if err != nil {
 		return toJSONError(err)
 	}
@@ -407,12 +409,12 @@ func (web *webAPIHandlers) SetAuth(r *http.Request, args *SetAuthArgs, reply *Se
 	errsMap := updateCredsOnPeers(creds)
 
 	// Update local credentials
-	prevCred := serverConfig.SetCredential(creds)
+	prevCred := globalServerConfig.SetCredential(creds)
 
 	// Persist updated credentials.
-	if err = serverConfig.Save(); err != nil {
+	if err = globalServerConfig.Save(); err != nil {
 		// Save the current creds when failed to update.
-		serverConfig.SetCredential(prevCred)
+		globalServerConfig.SetCredential(prevCred)
 
 		errsMap[globalMinioAddr] = err
 	}
@@ -431,7 +433,7 @@ func (web *webAPIHandlers) SetAuth(r *http.Request, args *SetAuthArgs, reply *Se
 		// Since the error message may be very long to display
 		// on the browser, we tell the user to check the
 		// server logs.
-		return toJSONError(errors.New("unexpected error(s) occurred - please check minio server logs"))
+		return toJSONError(fmt.Errorf("unexpected error(s) occurred - please check minio server logs"))
 	}
 
 	// As we have updated access/secret key, generate new auth token.
@@ -465,7 +467,7 @@ func (web *webAPIHandlers) GetAuth(r *http.Request, args *WebGenericArgs, reply 
 	if !isHTTPRequestValid(r) {
 		return toJSONError(errAuthentication)
 	}
-	creds := serverConfig.GetCredential()
+	creds := globalServerConfig.GetCredential()
 	reply.AccessKey = creds.AccessKey
 	reply.SecretKey = creds.SecretKey
 	reply.UIVersion = browser.UIVersion
@@ -484,7 +486,7 @@ func (web *webAPIHandlers) CreateURLToken(r *http.Request, args *WebGenericArgs,
 		return toJSONError(errAuthentication)
 	}
 
-	creds := serverConfig.GetCredential()
+	creds := globalServerConfig.GetCredential()
 
 	token, err := authenticateURL(creds.AccessKey, creds.SecretKey)
 	if err != nil {
@@ -541,8 +543,13 @@ func (web *webAPIHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer objectLock.Unlock()
 
-	sha256sum := ""
-	objInfo, err := objectAPI.PutObject(bucket, object, size, r.Body, metadata, sha256sum)
+	hashReader, err := hash.NewReader(r.Body, size, "", "")
+	if err != nil {
+		writeWebErrorResponse(w, err)
+		return
+	}
+
+	objInfo, err := objectAPI.PutObject(bucket, object, hashReader, metadata)
 	if err != nil {
 		writeWebErrorResponse(w, err)
 		return
@@ -722,20 +729,10 @@ func readBucketAccessPolicy(objAPI ObjectLayer, bucketName string) (policy.Bucke
 
 func getBucketAccessPolicy(objAPI ObjectLayer, bucketName string) (policy.BucketAccessPolicy, error) {
 	// FIXME: remove this code when S3 layer for gateway and server is unified.
-	var policyInfo policy.BucketAccessPolicy
-	var err error
-
-	switch layer := objAPI.(type) {
-	case *s3Objects:
-		policyInfo, err = layer.GetBucketPolicies(bucketName)
-	case *azureObjects:
-		policyInfo, err = layer.GetBucketPolicies(bucketName)
-	case *gcsGateway:
-		policyInfo, err = layer.GetBucketPolicies(bucketName)
-	default:
-		policyInfo, err = readBucketAccessPolicy(objAPI, bucketName)
+	if layer, ok := objAPI.(GatewayLayer); ok {
+		return layer.GetBucketPolicies(bucketName)
 	}
-	return policyInfo, err
+	return readBucketAccessPolicy(objAPI, bucketName)
 }
 
 // GetBucketPolicy - get bucket policy for the requested prefix.
@@ -751,7 +748,7 @@ func (web *webAPIHandlers) GetBucketPolicy(r *http.Request, args *GetBucketPolic
 
 	var policyInfo, err = getBucketAccessPolicy(objectAPI, args.BucketName)
 	if err != nil {
-		_, ok := errorCause(err).(PolicyNotFound)
+		_, ok := errors.Cause(err).(PolicyNotFound)
 		if !ok {
 			return toJSONError(err, args.BucketName)
 		}
@@ -793,7 +790,7 @@ func (web *webAPIHandlers) ListAllBucketPolicies(r *http.Request, args *ListAllB
 
 	var policyInfo, err = getBucketAccessPolicy(objectAPI, args.BucketName)
 	if err != nil {
-		_, ok := errorCause(err).(PolicyNotFound)
+		_, ok := errors.Cause(err).(PolicyNotFound)
 		if !ok {
 			return toJSONError(err, args.BucketName)
 		}
@@ -837,7 +834,7 @@ func (web *webAPIHandlers) SetBucketPolicy(r *http.Request, args *SetBucketPolic
 
 	var policyInfo, err = getBucketAccessPolicy(objectAPI, args.BucketName)
 	if err != nil {
-		if _, ok := errorCause(err).(PolicyNotFound); !ok {
+		if _, ok := errors.Cause(err).(PolicyNotFound); !ok {
 			return toJSONError(err, args.BucketName)
 		}
 		policyInfo = policy.BucketAccessPolicy{Version: "2012-10-17"}
@@ -861,12 +858,14 @@ func (web *webAPIHandlers) SetBucketPolicy(r *http.Request, args *SetBucketPolic
 	}
 
 	if len(policyInfo.Statements) == 0 {
-		err = persistAndNotifyBucketPolicyChange(args.BucketName, policyChange{true, nil}, objectAPI)
-		if err != nil {
+		if err = persistAndNotifyBucketPolicyChange(args.BucketName, policyChange{
+			true, policy.BucketAccessPolicy{},
+		}, objectAPI); err != nil {
 			return toJSONError(err, args.BucketName)
 		}
 		return nil
 	}
+
 	data, err := json.Marshal(policyInfo)
 	if err != nil {
 		return toJSONError(err)
@@ -879,7 +878,7 @@ func (web *webAPIHandlers) SetBucketPolicy(r *http.Request, args *SetBucketPolic
 		if apiErr.Code == "XMinioPolicyNesting" {
 			err = PolicyNesting{}
 		} else {
-			err = errors.New(apiErr.Description)
+			err = fmt.Errorf(apiErr.Description)
 		}
 		return toJSONError(err, args.BucketName)
 	}
@@ -926,8 +925,8 @@ func (web *webAPIHandlers) PresignedGet(r *http.Request, args *PresignedGetArgs,
 
 // Returns presigned url for GET method.
 func presignedGet(host, bucket, object string, expiry int64) string {
-	cred := serverConfig.GetCredential()
-	region := serverConfig.GetRegion()
+	cred := globalServerConfig.GetCredential()
+	region := globalServerConfig.GetRegion()
 
 	accessKey := cred.AccessKey
 	secretKey := cred.SecretKey
@@ -1005,7 +1004,7 @@ func toJSONError(err error, params ...string) (jerr *json2.Error) {
 
 // toWebAPIError - convert into error into APIError.
 func toWebAPIError(err error) APIError {
-	err = errorCause(err)
+	err = errors.Cause(err)
 	if err == errAuthentication {
 		return APIError{
 			Code:           "AccessDenied",
@@ -1018,13 +1017,13 @@ func toWebAPIError(err error) APIError {
 			HTTPStatusCode: http.StatusServiceUnavailable,
 			Description:    err.Error(),
 		}
-	} else if err == errInvalidAccessKeyLength {
+	} else if err == auth.ErrInvalidAccessKeyLength {
 		return APIError{
 			Code:           "AccessDenied",
 			HTTPStatusCode: http.StatusForbidden,
 			Description:    err.Error(),
 		}
-	} else if err == errInvalidSecretKeyLength {
+	} else if err == auth.ErrInvalidSecretKeyLength {
 		return APIError{
 			Code:           "AccessDenied",
 			HTTPStatusCode: http.StatusForbidden,
@@ -1048,10 +1047,10 @@ func toWebAPIError(err error) APIError {
 			HTTPStatusCode: http.StatusMethodNotAllowed,
 			Description:    err.Error(),
 		}
-	} else if err == errReservedBucket {
+	} else if err == errInvalidBucketName {
 		return APIError{
-			Code:           "AllAccessDisabled",
-			HTTPStatusCode: http.StatusForbidden,
+			Code:           "InvalidBucketName",
+			HTTPStatusCode: http.StatusBadRequest,
 			Description:    err.Error(),
 		}
 	} else if err == errInvalidArgument {
@@ -1071,7 +1070,7 @@ func toWebAPIError(err error) APIError {
 		return getAPIError(ErrBucketAlreadyOwnedByYou)
 	case BucketNameInvalid:
 		return getAPIError(ErrInvalidBucketName)
-	case BadDigest:
+	case hash.BadDigest:
 		return getAPIError(ErrBadDigest)
 	case IncompleteBody:
 		return getAPIError(ErrIncompleteBody)

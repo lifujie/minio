@@ -17,19 +17,17 @@
 package cmd
 
 import (
-	"crypto/md5"
 	"encoding/hex"
-	"hash"
 	"io"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/minio/minio/pkg/bpool"
+	"github.com/minio/minio/pkg/errors"
+	"github.com/minio/minio/pkg/hash"
 	"github.com/minio/minio/pkg/mimedb"
 	"github.com/minio/minio/pkg/objcache"
-	"github.com/minio/sha256-simd"
 )
 
 // list all errors which can be ignored in object operations.
@@ -117,7 +115,12 @@ func (xl xlObjects) CopyObject(srcBucket, srcObject, dstBucket, dstObject string
 		pipeWriter.Close() // Close writer explicitly signalling we wrote all data.
 	}()
 
-	objInfo, err := xl.PutObject(dstBucket, dstObject, length, pipeReader, metadata, "")
+	hashReader, err := hash.NewReader(pipeReader, length, "", "")
+	if err != nil {
+		return oi, toObjectErr(errors.Trace(err), dstBucket, dstObject)
+	}
+
+	objInfo, err := xl.PutObject(dstBucket, dstObject, hashReader, metadata)
 	if err != nil {
 		return oi, toObjectErr(err, dstBucket, dstObject)
 	}
@@ -141,12 +144,12 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 
 	// Start offset cannot be negative.
 	if startOffset < 0 {
-		return traceError(errUnexpected)
+		return errors.Trace(errUnexpected)
 	}
 
 	// Writer cannot be nil.
 	if writer == nil {
-		return traceError(errUnexpected)
+		return errors.Trace(errUnexpected)
 	}
 
 	// Read metadata associated with the object from all disks.
@@ -177,13 +180,13 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 
 	// Reply back invalid range if the input offset and length fall out of range.
 	if startOffset > xlMeta.Stat.Size || startOffset+length > xlMeta.Stat.Size {
-		return traceError(InvalidRange{startOffset, length, xlMeta.Stat.Size})
+		return errors.Trace(InvalidRange{startOffset, length, xlMeta.Stat.Size})
 	}
 
 	// Get start part index and offset.
 	partIndex, partOffset, err := xlMeta.ObjectToPartOffset(startOffset)
 	if err != nil {
-		return traceError(InvalidRange{startOffset, length, xlMeta.Stat.Size})
+		return errors.Trace(InvalidRange{startOffset, length, xlMeta.Stat.Size})
 	}
 
 	// Calculate endOffset according to length
@@ -195,7 +198,7 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 	// Get last part index to read given length.
 	lastPartIndex, _, err := xlMeta.ObjectToPartOffset(endOffset)
 	if err != nil {
-		return traceError(InvalidRange{startOffset, length, xlMeta.Stat.Size})
+		return errors.Trace(InvalidRange{startOffset, length, xlMeta.Stat.Size})
 	}
 
 	// Save the writer.
@@ -212,7 +215,7 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 
 			// Copy the data out.
 			if _, err = io.Copy(writer, reader); err != nil {
-				return traceError(err)
+				return errors.Trace(err)
 			}
 
 			// Success.
@@ -222,7 +225,7 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 
 		// For unknown error, return and error out.
 		if err != objcache.ErrKeyNotFoundInCache {
-			return traceError(err)
+			return errors.Trace(err)
 		} // Cache has not been found, fill the cache.
 
 		// Cache is only set if whole object is being read.
@@ -239,16 +242,12 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 			// Ignore error if cache is full, proceed to write the object.
 			if err != nil && err != objcache.ErrCacheFull {
 				// For any other error return here.
-				return toObjectErr(traceError(err), bucket, object)
+				return toObjectErr(errors.Trace(err), bucket, object)
 			}
 		}
 	}
 
 	var totalBytesRead int64
-
-	chunkSize := getChunkSize(xlMeta.Erasure.BlockSize, xlMeta.Erasure.DataBlocks)
-	pool := bpool.NewBytePool(chunkSize, len(onlineDisks))
-
 	storage, err := NewErasureStorage(onlineDisks, xlMeta.Erasure.DataBlocks, xlMeta.Erasure.ParityBlocks)
 	if err != nil {
 		return toObjectErr(err, bucket, object)
@@ -279,7 +278,7 @@ func (xl xlObjects) GetObject(bucket, object string, startOffset int64, length i
 			checksums[index] = checksumInfo.Hash
 		}
 
-		file, err := storage.ReadFile(mw, bucket, pathJoin(object, partName), partOffset, readSize, partSize, checksums, algorithm, xlMeta.Erasure.BlockSize, pool)
+		file, err := storage.ReadFile(mw, bucket, pathJoin(object, partName), partOffset, readSize, partSize, checksums, algorithm, xlMeta.Erasure.BlockSize)
 		if err != nil {
 			errorIf(err, "Unable to read %s of the object `%s/%s`.", partName, bucket, object)
 			return toObjectErr(err, bucket, object)
@@ -392,7 +391,7 @@ func rename(disks []StorageAPI, srcBucket, srcEntry, dstBucket, dstEntry string,
 			defer wg.Done()
 			err := disk.RenameFile(srcBucket, srcEntry, dstBucket, dstEntry)
 			if err != nil && err != errFileNotFound {
-				errs[index] = traceError(err)
+				errs[index] = errors.Trace(err)
 			}
 		}(index, disk)
 	}
@@ -403,7 +402,7 @@ func rename(disks []StorageAPI, srcBucket, srcEntry, dstBucket, dstEntry string,
 	// We can safely allow RenameFile errors up to len(xl.storageDisks) - xl.writeQuorum
 	// otherwise return failure. Cleanup successful renames.
 	err := reduceWriteQuorumErrs(errs, objectOpIgnoredErrs, quorum)
-	if errorCause(err) == errXLWriteQuorum {
+	if errors.Cause(err) == errXLWriteQuorum {
 		// Undo all the partial rename operations.
 		undoRename(disks, srcBucket, srcEntry, dstBucket, dstEntry, isDir, errs)
 	}
@@ -432,18 +431,18 @@ func renameObject(disks []StorageAPI, srcBucket, srcObject, dstBucket, dstObject
 // until EOF, erasure codes the data across all disk and additionally
 // writes `xl.json` which carries the necessary metadata for future
 // object operations.
-func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.Reader, metadata map[string]string, sha256sum string) (objInfo ObjectInfo, err error) {
+func (xl xlObjects) PutObject(bucket string, object string, data *hash.Reader, metadata map[string]string) (objInfo ObjectInfo, err error) {
 	// This is a special case with size as '0' and object ends with
 	// a slash separator, we treat it like a valid operation and
 	// return success.
-	if isObjectDir(object, size) {
+	if isObjectDir(object, data.Size()) {
 		// Check if an object is present as one of the parent dir.
 		// -- FIXME. (needs a new kind of lock).
 		// -- FIXME (this also causes performance issue when disks are down).
 		if xl.parentDirIsObject(bucket, path.Dir(object)) {
-			return ObjectInfo{}, toObjectErr(traceError(errFileAccessDenied), bucket, object)
+			return ObjectInfo{}, toObjectErr(errors.Trace(errFileAccessDenied), bucket, object)
 		}
-		return dirObjectInfo(bucket, object, size, metadata), nil
+		return dirObjectInfo(bucket, object, data.Size(), metadata), nil
 	}
 
 	// Validate put object input args.
@@ -451,11 +450,16 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 		return ObjectInfo{}, err
 	}
 
+	// Validate input data size and it can never be less than zero.
+	if data.Size() < 0 {
+		return ObjectInfo{}, toObjectErr(errors.Trace(errInvalidArgument))
+	}
+
 	// Check if an object is present as one of the parent dir.
 	// -- FIXME. (needs a new kind of lock).
 	// -- FIXME (this also causes performance issue when disks are down).
 	if xl.parentDirIsObject(bucket, path.Dir(object)) {
-		return ObjectInfo{}, toObjectErr(traceError(errFileAccessDenied), bucket, object)
+		return ObjectInfo{}, toObjectErr(errors.Trace(errFileAccessDenied), bucket, object)
 	}
 
 	// No metadata is set, allocate a new one.
@@ -466,53 +470,29 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 	uniqueID := mustGetUUID()
 	tempObj := uniqueID
 
-	// Initialize md5 writer.
-	md5Writer := md5.New()
-
-	writers := []io.Writer{md5Writer}
-
-	var sha256Writer hash.Hash
-	if sha256sum != "" {
-		sha256Writer = sha256.New()
-		writers = append(writers, sha256Writer)
-	}
+	// Limit the reader to its provided size if specified.
+	var reader io.Reader = data
 
 	// Proceed to set the cache.
 	var newBuffer io.WriteCloser
 
 	// If caching is enabled, proceed to set the cache.
-	if size > 0 && xl.objCacheEnabled {
+	if data.Size() > 0 && xl.objCacheEnabled {
 		// PutObject invalidates any previously cached object in memory.
 		xl.objCache.Delete(path.Join(bucket, object))
 
 		// Create a new entry in memory of size.
-		newBuffer, err = xl.objCache.Create(path.Join(bucket, object), size)
+		newBuffer, err = xl.objCache.Create(path.Join(bucket, object), data.Size())
 		if err == nil {
-			// Create a multi writer to write to both memory and client response.
-			writers = append(writers, newBuffer)
-		}
-		// Ignore error if cache is full, proceed to write the object.
-		if err != nil && err != objcache.ErrCacheFull {
-			// For any other error return here.
-			return ObjectInfo{}, toObjectErr(traceError(err), bucket, object)
+			// Cache incoming data into a buffer
+			reader = io.TeeReader(data, newBuffer)
+		} else {
+			// Return errors other than ErrCacheFull
+			if err != objcache.ErrCacheFull {
+				return ObjectInfo{}, toObjectErr(errors.Trace(err), bucket, object)
+			}
 		}
 	}
-
-	mw := io.MultiWriter(writers...)
-
-	// Limit the reader to its provided size if specified.
-	var limitDataReader io.Reader
-	if size > 0 {
-		// This is done so that we can avoid erroneous clients sending
-		// more data than the set content size.
-		limitDataReader = io.LimitReader(data, size)
-	} else {
-		// else we read till EOF.
-		limitDataReader = data
-	}
-
-	// Tee reader combines incoming data stream and md5, data read from input stream is written to md5.
-	teeReader := io.TeeReader(limitDataReader, mw)
 
 	// Initialize parts metadata
 	partsMetadata := make([]xlMetaV1, len(xl.storageDisks))
@@ -539,7 +519,10 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 	if err != nil {
 		return ObjectInfo{}, toObjectErr(err, bucket, object)
 	}
-	buffer := make([]byte, partsMetadata[0].Erasure.BlockSize, 2*partsMetadata[0].Erasure.BlockSize) // alloc additional space for parity blocks created while erasure coding
+
+	// Alloc additional space for parity blocks created while erasure coding
+	buffer := make([]byte, partsMetadata[0].Erasure.BlockSize, 2*partsMetadata[0].Erasure.BlockSize)
+
 	// Read data and split into parts - similar to multipart mechanism
 	for partIdx := 1; ; partIdx++ {
 		// Compute part name
@@ -547,16 +530,16 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 		// Compute the path of current part
 		tempErasureObj := pathJoin(uniqueID, partName)
 
-		// Calculate the size of the current part, if size is unknown, curPartSize wil be unknown too.
-		// allowEmptyPart will always be true if this is the first part and false otherwise.
+		// Calculate the size of the current part.
 		var curPartSize int64
-		curPartSize, err = getPartSizeFromIdx(size, globalPutPartSize, partIdx)
+		curPartSize, err = calculatePartSizeFromIdx(data.Size(), globalPutPartSize, partIdx)
 		if err != nil {
 			return ObjectInfo{}, toObjectErr(err, bucket, object)
 		}
 
 		// Hint the filesystem to pre-allocate one continuous large block.
 		// This is only an optimization.
+		var curPartReader io.Reader
 		if curPartSize > 0 {
 			pErr := xl.prepareFile(minioMetaTmpBucket, tempErasureObj, curPartSize, storage.disks, xlMeta.Erasure.BlockSize, xlMeta.Erasure.DataBlocks)
 			if pErr != nil {
@@ -564,7 +547,14 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 			}
 		}
 
-		file, erasureErr := storage.CreateFile(io.LimitReader(teeReader, globalPutPartSize), minioMetaTmpBucket, tempErasureObj, buffer, DefaultBitrotAlgorithm, xl.writeQuorum)
+		if curPartSize < data.Size() {
+			curPartReader = io.LimitReader(reader, curPartSize)
+		} else {
+			curPartReader = reader
+		}
+
+		file, erasureErr := storage.CreateFile(curPartReader, minioMetaTmpBucket,
+			tempErasureObj, buffer, DefaultBitrotAlgorithm, xl.writeQuorum)
 		if erasureErr != nil {
 			return ObjectInfo{}, toObjectErr(erasureErr, minioMetaTmpBucket, tempErasureObj)
 		}
@@ -572,58 +562,26 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 		// Should return IncompleteBody{} error when reader has fewer bytes
 		// than specified in request header.
 		if file.Size < curPartSize {
-			return ObjectInfo{}, traceError(IncompleteBody{})
+			return ObjectInfo{}, errors.Trace(IncompleteBody{})
 		}
 
 		// Update the total written size
 		sizeWritten += file.Size
 
-		// allowEmpty creating empty earsure file only when this is the first part. This flag is useful
-		// when size == -1 because in this case, we are not able to predict how many parts we will have.
-		allowEmpty := partIdx == 1
-		if file.Size > 0 || allowEmpty {
-			for i := range partsMetadata {
-				partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size)
-				partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
-			}
+		for i := range partsMetadata {
+			partsMetadata[i].AddObjectPart(partIdx, partName, "", file.Size)
+			partsMetadata[i].Erasure.AddChecksumInfo(ChecksumInfo{partName, file.Algorithm, file.Checksums[i]})
 		}
 
-		// If we didn't write anything or we know that the next part doesn't have any
-		// data to write, we should quit this loop immediately
-		if file.Size == 0 {
+		// We wrote everything, break out.
+		if sizeWritten == data.Size() {
 			break
-		}
-
-		// Check part size for the next index.
-		var partSize int64
-		partSize, err = getPartSizeFromIdx(size, globalPutPartSize, partIdx+1)
-		if err != nil {
-			return ObjectInfo{}, toObjectErr(err, bucket, object)
-		}
-		if partSize == 0 {
-			break
-		}
-	}
-
-	// For size == -1, perhaps client is sending in chunked encoding
-	// set the size as size that was actually written.
-	if size == -1 {
-		size = sizeWritten
-	} else {
-		// Check if stored data satisfies what is asked
-		if sizeWritten < size {
-			return ObjectInfo{}, traceError(IncompleteBody{})
 		}
 	}
 
 	// Save additional erasureMetadata.
 	modTime := UTCNow()
-
-	newMD5Hex := hex.EncodeToString(md5Writer.Sum(nil))
-	// Update the md5sum if not set with the newly calculated one.
-	if len(metadata["etag"]) == 0 {
-		metadata["etag"] = newMD5Hex
-	}
+	metadata["etag"] = hex.EncodeToString(data.MD5Current())
 
 	// Guess content-type from the extension if possible.
 	if metadata["content-type"] == "" {
@@ -631,22 +589,6 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 			if content, ok := mimedb.DB[strings.ToLower(strings.TrimPrefix(objectExt, "."))]; ok {
 				metadata["content-type"] = content.ContentType
 			}
-		}
-	}
-
-	// md5Hex representation.
-	md5Hex := metadata["etag"]
-	if md5Hex != "" {
-		if newMD5Hex != md5Hex {
-			// Returns md5 mismatch.
-			return ObjectInfo{}, traceError(BadDigest{md5Hex, newMD5Hex})
-		}
-	}
-
-	if sha256sum != "" {
-		newSHA256sum := hex.EncodeToString(sha256Writer.Sum(nil))
-		if newSHA256sum != sha256sum {
-			return ObjectInfo{}, traceError(SHA256Mismatch{})
 		}
 	}
 
@@ -670,7 +612,7 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 	// Update `xl.json` content on each disks.
 	for index := range partsMetadata {
 		partsMetadata[index].Meta = metadata
-		partsMetadata[index].Stat.Size = size
+		partsMetadata[index].Stat.Size = sizeWritten
 		partsMetadata[index].Stat.ModTime = modTime
 	}
 
@@ -686,7 +628,7 @@ func (xl xlObjects) PutObject(bucket string, object string, size int64, data io.
 
 	// Once we have successfully renamed the object, Close the buffer which would
 	// save the object on cache.
-	if size > 0 && xl.objCacheEnabled && newBuffer != nil {
+	if sizeWritten > 0 && xl.objCacheEnabled && newBuffer != nil {
 		newBuffer.Close()
 	}
 
@@ -722,14 +664,14 @@ func (xl xlObjects) deleteObject(bucket, object string) error {
 
 	for index, disk := range xl.storageDisks {
 		if disk == nil {
-			dErrs[index] = traceError(errDiskNotFound)
+			dErrs[index] = errors.Trace(errDiskNotFound)
 			continue
 		}
 		wg.Add(1)
 		go func(index int, disk StorageAPI) {
 			defer wg.Done()
 			err := cleanupDir(disk, bucket, object)
-			if err != nil && errorCause(err) != errVolumeNotFound {
+			if err != nil && errors.Cause(err) != errVolumeNotFound {
 				dErrs[index] = err
 			}
 		}(index, disk)
@@ -751,7 +693,7 @@ func (xl xlObjects) DeleteObject(bucket, object string) (err error) {
 
 	// Validate object exists.
 	if !xl.isObject(bucket, object) {
-		return traceError(ObjectNotFound{bucket, object})
+		return errors.Trace(ObjectNotFound{bucket, object})
 	} // else proceed to delete the object.
 
 	// Delete the object on all disks.

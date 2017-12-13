@@ -19,12 +19,12 @@ package cmd
 import (
 	"encoding/hex"
 	"fmt"
-	"io"
 	"path"
 	"runtime"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/minio/minio/pkg/errors"
 	"github.com/skyrings/skyring-common/tools/uuid"
 )
 
@@ -174,12 +174,12 @@ func mustGetUUID() string {
 }
 
 // Create an s3 compatible MD5sum for complete multipart transaction.
-func getCompleteMultipartMD5(parts []completePart) (string, error) {
+func getCompleteMultipartMD5(parts []CompletePart) (string, error) {
 	var finalMD5Bytes []byte
 	for _, part := range parts {
 		md5Bytes, err := hex.DecodeString(part.ETag)
 		if err != nil {
-			return "", traceError(err)
+			return "", errors.Trace(err)
 		}
 		finalMD5Bytes = append(finalMD5Bytes, md5Bytes...)
 	}
@@ -269,27 +269,3 @@ type byBucketName []BucketInfo
 func (d byBucketName) Len() int           { return len(d) }
 func (d byBucketName) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
 func (d byBucketName) Less(i, j int) bool { return d[i].Name < d[j].Name }
-
-// rangeReader returns a Reader that reads from r
-// but returns error after Max bytes read as errDataTooLarge.
-// but returns error if reader exits before reading Min bytes
-// errDataTooSmall.
-type rangeReader struct {
-	Reader io.Reader // underlying reader
-	Min    int64     // min bytes remaining
-	Max    int64     // max bytes remaining
-}
-
-func (l *rangeReader) Read(p []byte) (n int, err error) {
-	n, err = l.Reader.Read(p)
-	l.Max -= int64(n)
-	l.Min -= int64(n)
-	if l.Max < 0 {
-		// If more data is available than what is expected we return error.
-		return 0, errDataTooLarge
-	}
-	if err == io.EOF && l.Min > 0 {
-		return 0, errDataTooSmall
-	}
-	return
-}

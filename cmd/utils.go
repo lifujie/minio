@@ -18,14 +18,17 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -92,11 +95,11 @@ func checkValidMD5(md5 string) ([]byte, error) {
 
 /// http://docs.aws.amazon.com/AmazonS3/latest/dev/UploadingObjects.html
 const (
-	// Maximum object size per PUT request is 16GiB.
+	// Maximum object size per PUT request is 5TB.
 	// This is a divergence from S3 limit on purpose to support
 	// use cases where users are going to upload large files
 	// using 'curl' and presigned URL.
-	globalMaxObjectSize = 16 * humanize.GiByte
+	globalMaxObjectSize = 5 * humanize.TiByte
 
 	// Minimum Part size for multipart upload is 5MiB
 	globalMinPartSize = 5 * humanize.MiByte
@@ -187,7 +190,7 @@ func dumpRequest(r *http.Request) string {
 
 // isFile - returns whether given path is a file or not.
 func isFile(path string) bool {
-	if fi, err := osStat(path); err == nil {
+	if fi, err := os.Stat(path); err == nil {
 		return fi.Mode().IsRegular()
 	}
 
@@ -209,4 +212,42 @@ func checkURL(urlStr string) (*url.URL, error) {
 // UTCNow - returns current UTC time.
 func UTCNow() time.Time {
 	return time.Now().UTC()
+}
+
+// GenETag - generate UUID based ETag
+func GenETag() string {
+	return ToS3ETag(getMD5Hash([]byte(mustGetUUID())))
+}
+
+// ToS3ETag - return checksum to ETag
+func ToS3ETag(etag string) string {
+	etag = canonicalizeETag(etag)
+
+	if !strings.HasSuffix(etag, "-1") {
+		// Tools like s3cmd uses ETag as checksum of data to validate.
+		// Append "-1" to indicate ETag is not a checksum.
+		etag += "-1"
+	}
+
+	return etag
+}
+
+// NewCustomHTTPTransport returns a new http configuration
+// used while communicating with the cloud backends.
+// This sets the value for MaxIdleConns from 2 (go default) to
+// 100.
+func NewCustomHTTPTransport() http.RoundTripper {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &tls.Config{RootCAs: globalRootCAs},
+		DisableCompression:    true,
+	}
 }

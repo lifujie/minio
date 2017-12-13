@@ -31,8 +31,6 @@ func TestNewEndpoint(t *testing.T) {
 	u3, _ := url.Parse("http://127.0.0.1:8080/path")
 	u4, _ := url.Parse("http://192.168.253.200/path")
 
-	errMsg := ": no such host"
-
 	testCases := []struct {
 		arg              string
 		expectedEndpoint Endpoint
@@ -69,7 +67,6 @@ func TestNewEndpoint(t *testing.T) {
 		{"https://93.184.216.34:808080/path", Endpoint{}, -1, fmt.Errorf("invalid URL endpoint format: port number must be between 1 to 65535")},
 		{"http://server:8080//", Endpoint{}, -1, fmt.Errorf("empty or root path is not supported in URL endpoint")},
 		{"http://server:8080/", Endpoint{}, -1, fmt.Errorf("empty or root path is not supported in URL endpoint")},
-		{"http://server/path", Endpoint{}, -1, fmt.Errorf("lookup server" + errMsg)},
 		{"192.168.1.210:9000", Endpoint{}, -1, fmt.Errorf("invalid URL endpoint format: missing scheme http or https")},
 	}
 
@@ -81,16 +78,8 @@ func TestNewEndpoint(t *testing.T) {
 			}
 		} else if err == nil {
 			t.Fatalf("error: expected = %v, got = <nil>", testCase.expectedErr)
-		} else {
-			var match bool
-			if strings.HasSuffix(testCase.expectedErr.Error(), errMsg) {
-				match = strings.HasSuffix(err.Error(), errMsg)
-			} else {
-				match = (testCase.expectedErr.Error() == err.Error())
-			}
-			if !match {
-				t.Fatalf("error: expected = %v, got = %v", testCase.expectedErr, err)
-			}
+		} else if testCase.expectedErr.Error() != err.Error() {
+			t.Fatalf("error: expected = %v, got = %v", testCase.expectedErr, err)
 		}
 
 		if err == nil && !reflect.DeepEqual(testCase.expectedEndpoint, endpoint) {
@@ -337,6 +326,38 @@ func TestCreateEndpoints(t *testing.T) {
 			t.Fatalf("error: expected = <nil>, got = %v", err)
 		} else if err.Error() != testCase.expectedErr.Error() {
 			t.Fatalf("error: expected = %v, got = %v", testCase.expectedErr, err)
+		}
+	}
+}
+
+// Tests get local peer functionality, local peer is supposed to only return one entry per minio service.
+// So it means that if you have say localhost:9000 and localhost:9001 as endpointArgs then localhost:9001
+// is considered a remote service from localhost:9000 perspective.
+func TestGetLocalPeer(t *testing.T) {
+	tempGlobalMinioAddr := globalMinioAddr
+	defer func() {
+		globalMinioAddr = tempGlobalMinioAddr
+	}()
+	globalMinioAddr = ":9000"
+
+	testCases := []struct {
+		endpointArgs   []string
+		expectedResult string
+	}{
+		{[]string{"/d1", "/d2", "d3", "d4"}, ":9000"},
+		{[]string{"http://localhost:9000/d1", "http://localhost:9000/d2", "http://example.org:9000/d3", "http://example.com:9000/d4"},
+			"localhost:9000"},
+		{[]string{"http://localhost:9000/d1", "http://example.org:9000/d2", "http://example.com:9000/d3", "http://example.net:9000/d4"},
+			"localhost:9000"},
+		{[]string{"http://localhost:9000/d1", "http://localhost:9001/d2", "http://localhost:9002/d3", "http://localhost:9003/d4"},
+			"localhost:9000"},
+	}
+
+	for i, testCase := range testCases {
+		endpoints, _ := NewEndpointList(testCase.endpointArgs...)
+		remotePeer := GetLocalPeer(endpoints)
+		if remotePeer != testCase.expectedResult {
+			t.Fatalf("Test %d: expected: %v, got: %v", i+1, testCase.expectedResult, remotePeer)
 		}
 	}
 }

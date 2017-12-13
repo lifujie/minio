@@ -316,8 +316,8 @@ export const selectBucket = (newCurrentBucket, prefix) => {
 
 export const listObjects = () => {
   return (dispatch, getState) => {
-    const {currentBucket, currentPath, marker, objects, istruncated, web} = getState()
-    if (!istruncated) return
+    const {buckets, currentBucket, currentPath, marker, objects, istruncated, web} = getState()
+    if (!istruncated || buckets.length === 0) return
     web.ListObjects({
       bucketName: currentBucket,
       prefix: currentPath,
@@ -465,7 +465,7 @@ export const uploadFile = (file, xhr) => {
   return (dispatch, getState) => {
     const {currentBucket, currentPath} = getState()
     const objectName = `${currentPath}${file.name}`
-    const uploadUrl = `${window.location.origin}/minio/upload/${currentBucket}/${objectName}`
+    const uploadUrl = `${window.location.origin}${minioBrowserPrefix}/upload/${currentBucket}/${objectName}`
     // The slug is a unique identifer for the file upload.
     const slug = `${currentBucket}-${currentPath}-${file.name}`
 
@@ -482,7 +482,7 @@ export const uploadFile = (file, xhr) => {
     }))
 
     xhr.onload = function(event) {
-      if (xhr.status == 401 || xhr.status == 403 || xhr.status == 500) {
+      if (xhr.status == 401 || xhr.status == 403) {
         setShowAbortModal(false)
         dispatch(stopUpload({
           slug
@@ -490,6 +490,16 @@ export const uploadFile = (file, xhr) => {
         dispatch(showAlert({
           type: 'danger',
           message: 'Unauthorized request.'
+        }))
+      }
+      if (xhr.status == 500) {
+        setShowAbortModal(false)
+        dispatch(stopUpload({
+          slug
+        }))
+        dispatch(showAlert({
+          type: 'danger',
+          message: xhr.responseText
         }))
       }
       if (xhr.status == 200) {

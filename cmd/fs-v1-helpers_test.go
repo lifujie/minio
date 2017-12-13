@@ -24,8 +24,31 @@ import (
 	"path"
 	"testing"
 
+	"github.com/minio/minio/pkg/errors"
 	"github.com/minio/minio/pkg/lock"
 )
+
+// Tests - fsMkdirAll()
+func TestFSMkdirAll(t *testing.T) {
+	// create posix test setup
+	_, path, err := newPosixTestSetup()
+	if err != nil {
+		t.Fatalf("Unable to create posix test setup, %s", err)
+	}
+	defer os.RemoveAll(path)
+
+	if err = fsMkdirAll(""); errors.Cause(err) != errInvalidArgument {
+		t.Fatal("Unexpected error", err)
+	}
+
+	if err = fsMkdirAll(pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")); errors.Cause(err) != errFileNameTooLong {
+		t.Fatal("Unexpected error", err)
+	}
+
+	if err = fsMkdirAll(pathJoin(path, "success-vol", "success-object")); err != nil {
+		t.Fatal("Unexpected error", err)
+	}
+}
 
 func TestFSRenameFile(t *testing.T) {
 	// create posix test setup
@@ -41,13 +64,13 @@ func TestFSRenameFile(t *testing.T) {
 	if err = fsRenameFile(pathJoin(path, "testvolume1"), pathJoin(path, "testvolume2")); err != nil {
 		t.Fatal(err)
 	}
-	if err = fsRenameFile(pathJoin(path, "testvolume1"), pathJoin(path, "testvolume2")); errorCause(err) != errFileNotFound {
+	if err = fsRenameFile(pathJoin(path, "testvolume1"), pathJoin(path, "testvolume2")); errors.Cause(err) != errFileNotFound {
 		t.Fatal(err)
 	}
-	if err = fsRenameFile(pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"), pathJoin(path, "testvolume2")); errorCause(err) != errFileNameTooLong {
+	if err = fsRenameFile(pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"), pathJoin(path, "testvolume2")); errors.Cause(err) != errFileNameTooLong {
 		t.Fatal("Unexpected error", err)
 	}
-	if err = fsRenameFile(pathJoin(path, "testvolume1"), pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")); errorCause(err) != errFileNameTooLong {
+	if err = fsRenameFile(pathJoin(path, "testvolume1"), pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")); errors.Cause(err) != errFileNameTooLong {
 		t.Fatal("Unexpected error", err)
 	}
 }
@@ -62,11 +85,11 @@ func TestFSStats(t *testing.T) {
 
 	// Setup test environment.
 
-	if err = fsMkdir(""); errorCause(err) != errInvalidArgument {
+	if err = fsMkdir(""); errors.Cause(err) != errInvalidArgument {
 		t.Fatal("Unexpected error", err)
 	}
 
-	if err = fsMkdir(pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")); errorCause(err) != errFileNameTooLong {
+	if err = fsMkdir(pathJoin(path, "my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")); errors.Cause(err) != errFileNameTooLong {
 		t.Fatal("Unexpected error", err)
 	}
 
@@ -81,7 +104,7 @@ func TestFSStats(t *testing.T) {
 	// Seek back.
 	reader.Seek(0, 0)
 
-	if err = fsMkdir(pathJoin(path, "success-vol", "success-file")); errorCause(err) != errVolumeExists {
+	if err = fsMkdir(pathJoin(path, "success-vol", "success-file")); errors.Cause(err) != errVolumeExists {
 		t.Fatal("Unexpected error", err)
 	}
 
@@ -169,11 +192,11 @@ func TestFSStats(t *testing.T) {
 	for i, testCase := range testCases {
 		if testCase.srcPath != "" {
 			if _, err := fsStatFile(pathJoin(testCase.srcFSPath, testCase.srcVol,
-				testCase.srcPath)); errorCause(err) != testCase.expectedErr {
+				testCase.srcPath)); errors.Cause(err) != testCase.expectedErr {
 				t.Fatalf("TestPosix case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 			}
 		} else {
-			if _, err := fsStatDir(pathJoin(testCase.srcFSPath, testCase.srcVol)); errorCause(err) != testCase.expectedErr {
+			if _, err := fsStatVolume(pathJoin(testCase.srcFSPath, testCase.srcVol)); errors.Cause(err) != testCase.expectedErr {
 				t.Fatalf("TestPosix case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 			}
 		}
@@ -192,11 +215,11 @@ func TestFSCreateAndOpen(t *testing.T) {
 		t.Fatalf("Unable to create directory, %s", err)
 	}
 
-	if _, err = fsCreateFile("", nil, nil, 0); errorCause(err) != errInvalidArgument {
+	if _, err = fsCreateFile("", nil, nil, 0); errors.Cause(err) != errInvalidArgument {
 		t.Fatal("Unexpected error", err)
 	}
 
-	if _, _, err = fsOpenFile("", -1); errorCause(err) != errInvalidArgument {
+	if _, _, err = fsOpenFile("", -1); errors.Cause(err) != errInvalidArgument {
 		t.Fatal("Unexpected error", err)
 	}
 
@@ -230,17 +253,17 @@ func TestFSCreateAndOpen(t *testing.T) {
 
 	for i, testCase := range testCases {
 		_, err = fsCreateFile(pathJoin(path, testCase.srcVol, testCase.srcPath), reader, nil, 0)
-		if errorCause(err) != testCase.expectedErr {
+		if errors.Cause(err) != testCase.expectedErr {
 			t.Errorf("Test case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 		}
 		_, _, err = fsOpenFile(pathJoin(path, testCase.srcVol, testCase.srcPath), 0)
-		if errorCause(err) != testCase.expectedErr {
+		if errors.Cause(err) != testCase.expectedErr {
 			t.Errorf("Test case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 		}
 	}
 
 	// Attempt to open a directory.
-	if _, _, err = fsOpenFile(pathJoin(path), 0); errorCause(err) != errIsNotRegular {
+	if _, _, err = fsOpenFile(pathJoin(path), 0); errors.Cause(err) != errIsNotRegular {
 		t.Fatal("Unexpected error", err)
 	}
 }
@@ -342,7 +365,7 @@ func TestFSDeletes(t *testing.T) {
 	}
 
 	for i, testCase := range testCases {
-		if err = fsDeleteFile(testCase.basePath, pathJoin(testCase.basePath, testCase.srcVol, testCase.srcPath)); errorCause(err) != testCase.expectedErr {
+		if err = fsDeleteFile(testCase.basePath, pathJoin(testCase.basePath, testCase.srcVol, testCase.srcPath)); errors.Cause(err) != testCase.expectedErr {
 			t.Errorf("Test case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 		}
 	}
@@ -476,11 +499,11 @@ func TestFSRemoves(t *testing.T) {
 
 	for i, testCase := range testCases {
 		if testCase.srcPath != "" {
-			if err = fsRemoveFile(pathJoin(testCase.srcFSPath, testCase.srcVol, testCase.srcPath)); errorCause(err) != testCase.expectedErr {
+			if err = fsRemoveFile(pathJoin(testCase.srcFSPath, testCase.srcVol, testCase.srcPath)); errors.Cause(err) != testCase.expectedErr {
 				t.Errorf("Test case %d: Expected: \"%s\", got: \"%s\"", i+1, testCase.expectedErr, err)
 			}
 		} else {
-			if err = fsRemoveDir(pathJoin(testCase.srcFSPath, testCase.srcVol, testCase.srcPath)); errorCause(err) != testCase.expectedErr {
+			if err = fsRemoveDir(pathJoin(testCase.srcFSPath, testCase.srcVol, testCase.srcPath)); errors.Cause(err) != testCase.expectedErr {
 				t.Error(err)
 			}
 		}
@@ -490,11 +513,11 @@ func TestFSRemoves(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err = fsRemoveAll(""); errorCause(err) != errInvalidArgument {
+	if err = fsRemoveAll(""); errors.Cause(err) != errInvalidArgument {
 		t.Fatal(err)
 	}
 
-	if err = fsRemoveAll("my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"); errorCause(err) != errFileNameTooLong {
+	if err = fsRemoveAll("my-obj-del-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"); errors.Cause(err) != errFileNameTooLong {
 		t.Fatal(err)
 	}
 }
@@ -538,11 +561,11 @@ func TestFSRemoveMeta(t *testing.T) {
 		t.Fatalf("Unable to remove file, %s", err)
 	}
 
-	if _, err := osStat((filePath)); !os.IsNotExist(err) {
+	if _, err := os.Stat((filePath)); !os.IsNotExist(err) {
 		t.Fatalf("`%s` file found though it should have been deleted.", filePath)
 	}
 
-	if _, err := osStat((path.Dir(filePath))); !os.IsNotExist(err) {
+	if _, err := os.Stat((path.Dir(filePath))); !os.IsNotExist(err) {
 		t.Fatalf("`%s` parent directory found though it should have been deleted.", filePath)
 	}
 }

@@ -128,7 +128,6 @@ func TestMustGetLocalIP4(t *testing.T) {
 }
 
 func TestGetHostIP(t *testing.T) {
-	_, err := getHostIP4("myserver")
 	testCases := []struct {
 		host           string
 		expectedIPList set.StringSet
@@ -136,7 +135,6 @@ func TestGetHostIP(t *testing.T) {
 	}{
 		{"localhost", set.CreateStringSet("127.0.0.1"), nil},
 		{"example.org", set.CreateStringSet("93.184.216.34"), nil},
-		{"myserver", nil, err},
 	}
 
 	for _, testCase := range testCases {
@@ -175,6 +173,21 @@ func TestGetAPIEndpoints(t *testing.T) {
 			t.Fatalf("test %d: expected: Found, got: Not Found", i+1)
 		}
 	}
+}
+
+// Ask the kernel for a free open port.
+func getFreePort() string {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		panic(err)
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		panic(err)
+	}
+	defer l.Close()
+	return fmt.Sprintf("%d", l.Addr().(*net.TCPAddr).Port)
 }
 
 // Tests for port availability logic written for server startup sequence.

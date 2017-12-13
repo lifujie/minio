@@ -69,6 +69,27 @@ func TestRedirectLocation(t *testing.T) {
 	}
 }
 
+// Tests request guess function for net/rpc requests.
+func TestGuessIsRPC(t *testing.T) {
+	if guessIsRPCReq(nil) {
+		t.Fatal("Unexpected return for nil request")
+	}
+	r := &http.Request{
+		Proto:  "HTTP/1.0",
+		Method: http.MethodConnect,
+	}
+	if !guessIsRPCReq(r) {
+		t.Fatal("Test shouldn't fail for a possible net/rpc request.")
+	}
+	r = &http.Request{
+		Proto:  "HTTP/1.1",
+		Method: http.MethodGet,
+	}
+	if guessIsRPCReq(r) {
+		t.Fatal("Test shouldn't report as net/rpc for a non net/rpc request.")
+	}
+}
+
 // Tests browser request guess function.
 func TestGuessIsBrowser(t *testing.T) {
 	if guessIsBrowserReq(nil) {
@@ -120,6 +141,41 @@ func TestIsHTTPHeaderSizeTooLarge(t *testing.T) {
 	for i, test := range isHTTPHeaderSizeTooLargeTests {
 		if res := isHTTPHeaderSizeTooLarge(test.header); res != test.shouldFail {
 			t.Errorf("Test %d: Expected %v got %v", i, res, test.shouldFail)
+		}
+	}
+}
+
+var containsReservedMetadataTests = []struct {
+	header     http.Header
+	shouldFail bool
+}{
+	{
+		header: http.Header{"X-Minio-Key": []string{"value"}},
+	},
+	{
+		header:     http.Header{ServerSideEncryptionIV: []string{"iv"}},
+		shouldFail: true,
+	},
+	{
+		header:     http.Header{ServerSideEncryptionSealAlgorithm: []string{SSESealAlgorithmDareSha256}},
+		shouldFail: true,
+	},
+	{
+		header:     http.Header{ServerSideEncryptionSealedKey: []string{"mac"}},
+		shouldFail: true,
+	},
+	{
+		header:     http.Header{ReservedMetadataPrefix + "Key": []string{"value"}},
+		shouldFail: true,
+	},
+}
+
+func TestContainsReservedMetadata(t *testing.T) {
+	for i, test := range containsReservedMetadataTests {
+		if contains := containsReservedMetadata(test.header); contains && !test.shouldFail {
+			t.Errorf("Test %d: contains reserved header but should not fail", i)
+		} else if !contains && test.shouldFail {
+			t.Errorf("Test %d: does not contain reserved header but failed", i)
 		}
 	}
 }

@@ -40,7 +40,9 @@ type Encoder interface {
 	// ones that don't have data.
 	//
 	// The length of the array must be equal to the total number of shards.
-	// You indicate that a shard is missing by setting it to nil.
+	// You indicate that a shard is missing by setting it to nil or zero-length.
+	// If a shard is zero-length but has sufficient capacity, that memory will
+	// be used, otherwise a new []byte will be allocated.
 	//
 	// If there are too few shards to reconstruct the missing
 	// ones, ErrTooFewShards will be returned.
@@ -55,7 +57,9 @@ type Encoder interface {
 	// data shards that don't have data.
 	//
 	// The length of the array must be equal to Shards.
-	// You indicate that a shard is missing by setting it to nil.
+	// You indicate that a shard is missing by setting it to nil or zero-length.
+	// If a shard is zero-length but has sufficient capacity, that memory will
+	// be used, otherwise a new []byte will be allocated.
 	//
 	// If there are too few shards to reconstruct the missing
 	// ones, ErrTooFewShards will be returned.
@@ -179,6 +183,26 @@ func buildMatrixPAR1(dataShards, totalShards int) (matrix, error) {
 	return result, nil
 }
 
+func buildMatrixCauchy(dataShards, totalShards int) (matrix, error) {
+	result, err := newMatrix(totalShards, dataShards)
+	if err != nil {
+		return nil, err
+	}
+
+	for r, row := range result {
+		// The top portion of the matrix is the identity
+		// matrix, and the bottom is a transposed Cauchy matrix.
+		if r < dataShards {
+			result[r][r] = 1
+		} else {
+			for c := range row {
+				result[r][c] = invTable[(byte(r ^ c))]
+			}
+		}
+	}
+	return result, nil
+}
+
 // New creates a new encoder and initializes it to
 // the number of data shards and parity shards that
 // you want to use. You can reuse this encoder.
@@ -204,9 +228,12 @@ func New(dataShards, parityShards int, opts ...Option) (Encoder, error) {
 	}
 
 	var err error
-	if r.o.usePAR1Matrix {
+	switch {
+	case r.o.useCauchy:
+		r.m, err = buildMatrixCauchy(dataShards, r.Shards)
+	case r.o.usePAR1Matrix:
 		r.m, err = buildMatrixPAR1(dataShards, r.Shards)
-	} else {
+	default:
 		r.m, err = buildMatrix(dataShards, r.Shards)
 	}
 	if err != nil {
@@ -547,7 +574,9 @@ func shardSize(shards [][]byte) int {
 // ones that don't have data.
 //
 // The length of the array must be equal to Shards.
-// You indicate that a shard is missing by setting it to nil.
+// You indicate that a shard is missing by setting it to nil or zero-length.
+// If a shard is zero-length but has sufficient capacity, that memory will
+// be used, otherwise a new []byte will be allocated.
 //
 // If there are too few shards to reconstruct the missing
 // ones, ErrTooFewShards will be returned.
@@ -564,7 +593,9 @@ func (r reedSolomon) Reconstruct(shards [][]byte) error {
 // data shards that don't have data.
 //
 // The length of the array must be equal to Shards.
-// You indicate that a shard is missing by setting it to nil.
+// You indicate that a shard is missing by setting it to nil or zero-length.
+// If a shard is zero-length but has sufficient capacity, that memory will
+// be used, otherwise a new []byte will be allocated.
 //
 // If there are too few shards to reconstruct the missing
 // ones, ErrTooFewShards will be returned.
@@ -682,7 +713,11 @@ func (r reedSolomon) reconstruct(shards [][]byte, dataOnly bool) error {
 
 	for iShard := 0; iShard < r.DataShards; iShard++ {
 		if len(shards[iShard]) == 0 {
-			shards[iShard] = make([]byte, shardSize)
+			if cap(shards[iShard]) >= shardSize {
+				shards[iShard] = shards[iShard][0:shardSize]
+			} else {
+				shards[iShard] = make([]byte, shardSize)
+			}
 			outputs[outputCount] = shards[iShard]
 			matrixRows[outputCount] = dataDecodeMatrix[iShard]
 			outputCount++
@@ -704,7 +739,11 @@ func (r reedSolomon) reconstruct(shards [][]byte, dataOnly bool) error {
 	outputCount = 0
 	for iShard := r.DataShards; iShard < r.Shards; iShard++ {
 		if len(shards[iShard]) == 0 {
-			shards[iShard] = make([]byte, shardSize)
+			if cap(shards[iShard]) >= shardSize {
+				shards[iShard] = shards[iShard][0:shardSize]
+			} else {
+				shards[iShard] = make([]byte, shardSize)
+			}
 			outputs[outputCount] = shards[iShard]
 			matrixRows[outputCount] = r.parity[iShard-r.DataShards]
 			outputCount++

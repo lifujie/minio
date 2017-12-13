@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/minio/minio/pkg/errors"
 )
 
 // Tests healing of format XL.
@@ -289,7 +291,7 @@ func TestUndoMakeBucket(t *testing.T) {
 	// Validate if bucket was deleted properly.
 	_, err = obj.GetBucketInfo(bucketName)
 	if err != nil {
-		err = errorCause(err)
+		err = errors.Cause(err)
 		switch err.(type) {
 		case BucketNotFound:
 		default:
@@ -489,13 +491,13 @@ func TestHealObjectXL(t *testing.T) {
 		t.Fatalf("Failed to create a multipart upload - %v", err)
 	}
 
-	var uploadedParts []completePart
+	var uploadedParts []CompletePart
 	for _, partID := range []int{2, 1} {
-		pInfo, err1 := obj.PutObjectPart(bucket, object, uploadID, partID, int64(len(data)), bytes.NewReader(data), "", "")
+		pInfo, err1 := obj.PutObjectPart(bucket, object, uploadID, partID, mustGetHashReader(t, bytes.NewReader(data), int64(len(data)), "", ""))
 		if err1 != nil {
 			t.Fatalf("Failed to upload a part - %v", err1)
 		}
-		uploadedParts = append(uploadedParts, completePart{
+		uploadedParts = append(uploadedParts, CompletePart{
 			PartNumber: pInfo.PartNumber,
 			ETag:       pInfo.ETag,
 		})
@@ -531,7 +533,7 @@ func TestHealObjectXL(t *testing.T) {
 
 	// Try healing now, expect to receive errDiskNotFound.
 	_, _, err = obj.HealObject(bucket, object)
-	if errorCause(err) != errDiskNotFound {
+	if errors.Cause(err) != errDiskNotFound {
 		t.Errorf("Expected %v but received %v", errDiskNotFound, err)
 	}
 }

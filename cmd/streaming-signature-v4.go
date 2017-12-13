@@ -43,7 +43,7 @@ const (
 // getChunkSignature - get chunk signature.
 func getChunkSignature(seedSignature string, region string, date time.Time, hashedChunk string) string {
 	// Access credentials.
-	cred := serverConfig.GetCredential()
+	cred := globalServerConfig.GetCredential()
 
 	// Calculate string to sign.
 	stringToSign := signV4ChunkedAlgorithm + "\n" +
@@ -68,10 +68,10 @@ func getChunkSignature(seedSignature string, region string, date time.Time, hash
 // error while parsing and validating.
 func calculateSeedSignature(r *http.Request) (signature string, region string, date time.Time, errCode APIErrorCode) {
 	// Access credentials.
-	cred := serverConfig.GetCredential()
+	cred := globalServerConfig.GetCredential()
 
 	// Configured region.
-	confRegion := serverConfig.GetRegion()
+	confRegion := globalServerConfig.GetRegion()
 
 	// Copy request.
 	req := *r
@@ -164,7 +164,7 @@ var errMalformedEncoding = errors.New("malformed chunked encoding")
 //
 // NewChunkedReader is not needed by normal applications. The http package
 // automatically decodes chunking when reading response bodies.
-func newSignV4ChunkedReader(req *http.Request) (io.Reader, APIErrorCode) {
+func newSignV4ChunkedReader(req *http.Request) (io.ReadCloser, APIErrorCode) {
 	seedSignature, region, seedDate, errCode := calculateSeedSignature(req)
 	if errCode != ErrNone {
 		return nil, errCode
@@ -240,6 +240,10 @@ func (cs chunkState) String() string {
 
 	}
 	return stateString
+}
+
+func (cr *s3ChunkedReader) Close() (err error) {
+	return nil
 }
 
 // Read - implements `io.Reader`, which transparently decodes

@@ -150,16 +150,21 @@ export default class Browse extends React.Component {
       if (prefix === currentPath) return
       browserHistory.push(utils.pathJoin(currentBucket, encPrefix))
     } else {
-      // Download the selected file.
-      web.CreateURLToken()
-        .then(res => {
-          let url = `${window.location.origin}/minio/download/${currentBucket}/${encPrefix}?token=${res.token}`
-          window.location = url
-        })
-        .catch(err => dispatch(actions.showAlert({
-          type: 'danger',
-          message: err.message
-        })))
+      if (!web.LoggedIn()) {
+        let url = `${window.location.origin}/minio/download/${currentBucket}/${encPrefix}?token=''`
+        window.location = url
+      } else {
+        // Download the selected file.
+        web.CreateURLToken()
+          .then(res => {
+            let url = `${window.location.origin}${minioBrowserPrefix}/download/${currentBucket}/${encPrefix}?token=${res.token}`
+            window.location = url
+          })
+          .catch(err => dispatch(actions.showAlert({
+            type: 'danger',
+            message: err.message
+          })))
+      }
     }
   }
 
@@ -421,18 +426,22 @@ export default class Browse extends React.Component {
       objects: this.props.checkedObjects,
       prefix: this.props.currentPath
     }
-
-    web.CreateURLToken()
-      .then(res => {
-        let requestUrl = location.origin + "/minio/zip?token=" + res.token
-
-        this.xhr = new XMLHttpRequest()
-        dispatch(actions.downloadSelected(requestUrl, req, this.xhr))
-      })
-      .catch(err => dispatch(actions.showAlert({
-        type: 'danger',
-        message: err.message
-      })))
+    if (!web.LoggedIn()) {
+      let requestUrl = location.origin + "/minio/zip?token=''"
+      this.xhr = new XMLHttpRequest()
+      dispatch(actions.downloadSelected(requestUrl, req, this.xhr))
+    } else {
+      web.CreateURLToken()
+        .then(res => {
+          let requestUrl = location.origin + minioBrowserPrefix + "/zip?token=" + res.token
+          this.xhr = new XMLHttpRequest()
+          dispatch(actions.downloadSelected(requestUrl, req, this.xhr))
+        })
+        .catch(err => dispatch(actions.showAlert({
+          type: 'danger',
+          message: err.message
+        })))
+    }
   }
 
   clearSelected() {
@@ -493,7 +502,7 @@ export default class Browse extends React.Component {
                                 settingsFunc={ this.showSettings.bind(this) }
                                 logoutFunc={ this.logout.bind(this) } />
     } else {
-      loginButton = <a className='btn btn-danger' href='/minio/login'>Login</a>
+      loginButton = <a className='btn btn-danger' href={minioBrowserPrefix+'/login'}>Login</a>
     }
 
     if (web.LoggedIn()) {

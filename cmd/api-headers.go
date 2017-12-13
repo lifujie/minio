@@ -38,7 +38,7 @@ func setCommonHeaders(w http.ResponseWriter) {
 	w.Header().Set("Server", globalServerUserAgent)
 	// Set `x-amz-bucket-region` only if region is set on the server
 	// by default minio uses an empty region.
-	if region := serverConfig.GetRegion(); region != "" {
+	if region := globalServerConfig.GetRegion(); region != "" {
 		w.Header().Set("X-Amz-Bucket-Region", region)
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -68,6 +68,14 @@ func setObjectHeaders(w http.ResponseWriter, objInfo ObjectInfo, contentRange *h
 	// Set Etag if available.
 	if objInfo.ETag != "" {
 		w.Header().Set("ETag", "\""+objInfo.ETag+"\"")
+	}
+
+	if objInfo.ContentType != "" {
+		w.Header().Set("Content-Type", objInfo.ContentType)
+	}
+
+	if objInfo.ContentEncoding != "" {
+		w.Header().Set("Content-Encoding", objInfo.ContentEncoding)
 	}
 
 	// Set all other user defined metadata.

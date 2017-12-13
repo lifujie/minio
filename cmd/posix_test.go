@@ -1016,43 +1016,23 @@ func TestPosixReadFile(t *testing.T) {
 			[]byte("world"),
 			io.ErrUnexpectedEOF,
 		},
-		// Seeking into a wrong offset, return PathError. - 11
-		{
-			volume, "myobject",
-			-1, 5,
-			nil,
-			func() error {
-				if runtime.GOOS == globalWindowsOSName {
-					return &os.PathError{
-						Op:   "read",
-						Path: slashpath.Join(path, "success-vol", "myobject"),
-						Err:  syscall.Errno(0x57), // invalid parameter
-					}
-				}
-				return &os.PathError{
-					Op:   "read",
-					Path: slashpath.Join(path, "success-vol", "myobject"),
-					Err:  os.ErrInvalid,
-				}
-			}(),
-		},
-		// Seeking ahead returns io.EOF. - 12
+		// Seeking ahead returns io.EOF. - 11
 		{
 			volume, "myobject", 14, 1, nil, io.EOF,
 		},
-		// Empty volume name. - 13
+		// Empty volume name. - 12
 		{
 			"", "myobject", 14, 1, nil, errInvalidArgument,
 		},
-		// Empty filename name. - 14
+		// Empty filename name. - 13
 		{
 			volume, "", 14, 1, nil, errIsNotRegular,
 		},
-		// Non existent volume name - 15.
+		// Non existent volume name - 14.
 		{
 			"abcd", "", 14, 1, nil, errVolumeNotFound,
 		},
-		// Non existent filename - 16.
+		// Non existent filename - 15.
 		{
 			volume, "abcd", 14, 1, nil, errFileNotFound,
 		},
@@ -1069,12 +1049,30 @@ func TestPosixReadFile(t *testing.T) {
 		}
 	}
 
+	// Check PathError specially.
+	{
+		buf := make([]byte, 5)
+		if _, err = posixStorage.ReadFile(volume, "myobject", -1, buf, nil); err != nil {
+			isPathError := false
+			switch err.(type) {
+			case *os.PathError:
+				isPathError = true
+			}
+
+			if !isPathError {
+				t.Fatalf("expected: <os.PathError>, got: %v", err)
+			}
+		} else {
+			t.Fatalf("expected: <os.PathError>, got: <nil>")
+		}
+	}
+
 	// Following block validates all ReadFile test cases.
 	for i, testCase := range testCases {
 		var n int64
 		// Common read buffer.
 		var buf = make([]byte, testCase.bufSize)
-		n, err = posixStorage.ReadFile(testCase.volume, testCase.fileName, testCase.offset, buf)
+		n, err = posixStorage.ReadFile(testCase.volume, testCase.fileName, testCase.offset, buf, nil)
 		if err != nil && testCase.expectedErr != nil {
 			// Validate if the type string of the errors are an exact match.
 			if err.Error() != testCase.expectedErr.Error() {
@@ -1135,7 +1133,7 @@ func TestPosixReadFile(t *testing.T) {
 		if err == nil {
 			// Common read buffer.
 			var buf = make([]byte, 10)
-			if _, err = posixStorage.ReadFile("proc", "1/fd", 0, buf); err != errFileAccessDenied {
+			if _, err = posixStorage.ReadFile("proc", "1/fd", 0, buf, nil); err != errFileAccessDenied {
 				t.Errorf("expected: %s, got: %s", errFileAccessDenied, err)
 			}
 		}
@@ -1149,7 +1147,7 @@ func TestPosixReadFile(t *testing.T) {
 		posixType.ioErrCount = int32(6)
 		// Common read buffer.
 		var buf = make([]byte, 10)
-		_, err = posixType.ReadFile("abc", "yes", 0, buf)
+		_, err = posixType.ReadFile("abc", "yes", 0, buf, nil)
 		if err != errFaultyDisk {
 			t.Fatalf("Expected \"Faulty Disk\", got: \"%s\"", err)
 		}
@@ -1183,8 +1181,8 @@ var posixReadFileWithVerifyTests = []struct {
 	{file: "myobject", offset: 1000, length: 1001, algorithm: BLAKE2b512, expError: nil},             // 15
 }
 
-// TestPosixReadFileWithVerify - tests the posix level
-// ReadFileWithVerify API. Only tests hashing related
+// TestPosixReadFile with bitrot verification - tests the posix level
+// ReadFile API with a BitrotVerifier. Only tests hashing related
 // functionality. Other functionality is tested with
 // TestPosixReadFile.
 func TestPosixReadFileWithVerify(t *testing.T) {
@@ -1218,7 +1216,7 @@ func TestPosixReadFileWithVerify(t *testing.T) {
 		}
 
 		buffer := make([]byte, test.length)
-		n, err := posixStorage.ReadFileWithVerify(volume, test.file, int64(test.offset), buffer, NewBitrotVerifier(test.algorithm, h.Sum(nil)))
+		n, err := posixStorage.ReadFile(volume, test.file, int64(test.offset), buffer, NewBitrotVerifier(test.algorithm, h.Sum(nil)))
 
 		switch {
 		case err == nil && test.expError != nil:

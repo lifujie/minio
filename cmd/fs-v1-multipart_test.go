@@ -22,8 +22,11 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/minio/minio/pkg/errors"
 )
 
+// Tests cleanup multipart uploads for filesystem backend.
 func TestFSCleanupMultipartUploadsInRoutine(t *testing.T) {
 	// Prepare for tests
 	disk := filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
@@ -45,7 +48,7 @@ func TestFSCleanupMultipartUploadsInRoutine(t *testing.T) {
 		t.Fatal("Unexpected err: ", err)
 	}
 
-	go fs.cleanupStaleMultipartUploads(20*time.Millisecond, 0, globalServiceDoneCh)
+	go cleanupStaleMultipartUploads(20*time.Millisecond, 0, obj, fs.listMultipartUploadsCleanup, globalServiceDoneCh)
 
 	// Wait for 40ms such that - we have given enough time for
 	// cleanup routine to kick in.
@@ -56,7 +59,7 @@ func TestFSCleanupMultipartUploadsInRoutine(t *testing.T) {
 
 	// Check if upload id was already purged.
 	if err = obj.AbortMultipartUpload(bucketName, objectName, uploadID); err != nil {
-		err = errorCause(err)
+		err = errors.Cause(err)
 		if _, ok := err.(InvalidUploadID); !ok {
 			t.Fatal("Unexpected err: ", err)
 		}
@@ -87,13 +90,13 @@ func TestFSCleanupMultipartUpload(t *testing.T) {
 		t.Fatal("Unexpected err: ", err)
 	}
 
-	if err = fs.cleanupStaleMultipartUpload(bucketName, 0); err != nil {
+	if err = cleanupStaleMultipartUpload(bucketName, 0, obj, fs.listMultipartUploadsCleanup); err != nil {
 		t.Fatal("Unexpected err: ", err)
 	}
 
 	// Check if upload id was already purged.
 	if err = obj.AbortMultipartUpload(bucketName, objectName, uploadID); err != nil {
-		err = errorCause(err)
+		err = errors.Cause(err)
 		if _, ok := err.(InvalidUploadID); !ok {
 			t.Fatal("Unexpected err: ", err)
 		}
@@ -122,7 +125,7 @@ func TestFSWriteUploadJSON(t *testing.T) {
 	fs.fsPath = filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
 	_, err = obj.NewMultipartUpload(bucketName, objectName, nil)
 	if err != nil {
-		if _, ok := errorCause(err).(BucketNotFound); !ok {
+		if _, ok := errors.Cause(err).(BucketNotFound); !ok {
 			t.Fatal("Unexpected err: ", err)
 		}
 	}
@@ -146,7 +149,7 @@ func TestNewMultipartUploadFaultyDisk(t *testing.T) {
 	// Test with disk removed.
 	fs.fsPath = filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
 	if _, err := fs.NewMultipartUpload(bucketName, objectName, map[string]string{"X-Amz-Meta-xid": "3f"}); err != nil {
-		if !isSameType(errorCause(err), BucketNotFound{}) {
+		if !isSameType(errors.Cause(err), BucketNotFound{}) {
 			t.Fatal("Unexpected error ", err)
 		}
 	}
@@ -183,8 +186,8 @@ func TestPutObjectPartFaultyDisk(t *testing.T) {
 	sha256sum := ""
 
 	fs.fsPath = filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
-	_, err = fs.PutObjectPart(bucketName, objectName, uploadID, 1, dataLen, bytes.NewReader(data), md5Hex, sha256sum)
-	if !isSameType(errorCause(err), BucketNotFound{}) {
+	_, err = fs.PutObjectPart(bucketName, objectName, uploadID, 1, mustGetHashReader(t, bytes.NewReader(data), dataLen, md5Hex, sha256sum))
+	if !isSameType(errors.Cause(err), BucketNotFound{}) {
 		t.Fatal("Unexpected error ", err)
 	}
 }
@@ -211,19 +214,84 @@ func TestCompleteMultipartUploadFaultyDisk(t *testing.T) {
 	}
 
 	md5Hex := getMD5Hash(data)
-	sha256sum := ""
 
-	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, 5, bytes.NewReader(data), md5Hex, sha256sum); err != nil {
+	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, mustGetHashReader(t, bytes.NewReader(data), 5, md5Hex, "")); err != nil {
 		t.Fatal("Unexpected error ", err)
 	}
 
-	parts := []completePart{{PartNumber: 1, ETag: md5Hex}}
+	parts := []CompletePart{{PartNumber: 1, ETag: md5Hex}}
 
 	fs.fsPath = filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
 	if _, err := fs.CompleteMultipartUpload(bucketName, objectName, uploadID, parts); err != nil {
-		if !isSameType(errorCause(err), BucketNotFound{}) {
+		if !isSameType(errors.Cause(err), BucketNotFound{}) {
 			t.Fatal("Unexpected error ", err)
 		}
+	}
+}
+
+// TestCompleteMultipartUploadFaultyDisk - test CompleteMultipartUpload with faulty disks
+func TestCompleteMultipartUpload(t *testing.T) {
+	// Prepare for tests
+	disk := filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
+	defer os.RemoveAll(disk)
+	obj := initFSObjects(disk, t)
+
+	fs := obj.(*fsObjects)
+	bucketName := "bucket"
+	objectName := "object"
+	data := []byte("12345")
+
+	if err := obj.MakeBucketWithLocation(bucketName, ""); err != nil {
+		t.Fatal("Cannot create bucket, err: ", err)
+	}
+
+	uploadID, err := fs.NewMultipartUpload(bucketName, objectName, map[string]string{"X-Amz-Meta-xid": "3f"})
+	if err != nil {
+		t.Fatal("Unexpected error ", err)
+	}
+
+	md5Hex := getMD5Hash(data)
+
+	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, mustGetHashReader(t, bytes.NewReader(data), 5, md5Hex, "")); err != nil {
+		t.Fatal("Unexpected error ", err)
+	}
+
+	parts := []CompletePart{{PartNumber: 1, ETag: md5Hex}}
+
+	if _, err := fs.CompleteMultipartUpload(bucketName, objectName, uploadID, parts); err != nil {
+		t.Fatal("Unexpected error ", err)
+	}
+}
+
+// TestCompleteMultipartUploadFaultyDisk - test CompleteMultipartUpload with faulty disks
+func TestAbortMultipartUpload(t *testing.T) {
+	// Prepare for tests
+	disk := filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
+	defer os.RemoveAll(disk)
+	obj := initFSObjects(disk, t)
+
+	fs := obj.(*fsObjects)
+	bucketName := "bucket"
+	objectName := "object"
+	data := []byte("12345")
+
+	if err := obj.MakeBucketWithLocation(bucketName, ""); err != nil {
+		t.Fatal("Cannot create bucket, err: ", err)
+	}
+
+	uploadID, err := fs.NewMultipartUpload(bucketName, objectName, map[string]string{"X-Amz-Meta-xid": "3f"})
+	if err != nil {
+		t.Fatal("Unexpected error ", err)
+	}
+
+	md5Hex := getMD5Hash(data)
+
+	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, mustGetHashReader(t, bytes.NewReader(data), 5, md5Hex, "")); err != nil {
+		t.Fatal("Unexpected error ", err)
+	}
+
+	if err := fs.AbortMultipartUpload(bucketName, objectName, uploadID); err != nil {
+		t.Fatal("Unexpected error ", err)
 	}
 }
 
@@ -252,13 +320,13 @@ func TestListMultipartUploadsFaultyDisk(t *testing.T) {
 	md5Hex := getMD5Hash(data)
 	sha256sum := ""
 
-	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, 5, bytes.NewReader(data), md5Hex, sha256sum); err != nil {
+	if _, err := fs.PutObjectPart(bucketName, objectName, uploadID, 1, mustGetHashReader(t, bytes.NewReader(data), 5, md5Hex, sha256sum)); err != nil {
 		t.Fatal("Unexpected error ", err)
 	}
 
 	fs.fsPath = filepath.Join(globalTestTmpDir, "minio-"+nextSuffix())
 	if _, err := fs.ListMultipartUploads(bucketName, objectName, "", "", "", 1000); err != nil {
-		if !isSameType(errorCause(err), BucketNotFound{}) {
+		if !isSameType(errors.Cause(err), BucketNotFound{}) {
 			t.Fatal("Unexpected error ", err)
 		}
 	}

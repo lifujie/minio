@@ -20,12 +20,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"strconv"
 	"testing"
 
 	humanize "github.com/dustin/go-humanize"
+	"github.com/minio/minio/pkg/errors"
 )
 
 // Tests caclculating disk count.
@@ -92,11 +92,11 @@ func TestReduceErrs(t *testing.T) {
 	// Validates list of all the testcases for returning valid errors.
 	for i, testCase := range testCases {
 		gotErr := reduceReadQuorumErrs(testCase.errs, testCase.ignoredErrs, 5)
-		if errorCause(gotErr) != testCase.err {
+		if errors.Cause(gotErr) != testCase.err {
 			t.Errorf("Test %d : expected %s, got %s", i+1, testCase.err, gotErr)
 		}
 		gotNewErr := reduceWriteQuorumErrs(testCase.errs, testCase.ignoredErrs, 6)
-		if errorCause(gotNewErr) != errXLWriteQuorum {
+		if errors.Cause(gotNewErr) != errXLWriteQuorum {
 			t.Errorf("Test %d : expected %s, got %s", i+1, errXLWriteQuorum, gotErr)
 		}
 	}
@@ -110,14 +110,14 @@ func TestHashOrder(t *testing.T) {
 	}{
 		// cases which should pass the test.
 		// passing in valid object name.
-		{"object", []int{15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}},
-		{"The Shining Script <v1>.pdf", []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
+		{"object", []int{14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}},
+		{"The Shining Script <v1>.pdf", []int{16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}},
 		{"Cost Benefit Analysis (2009-2010).pptx", []int{15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}},
 		{"117Gn8rfHL2ACARPAhaFd0AGzic9pUbIA/5OCn5A", []int{3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2}},
 		{"SHØRT", []int{11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
 		{"There are far too many object names, and far too few bucket names!", []int{15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}},
 		{"a/b/c/", []int{3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2}},
-		{"/a/b/c", []int{7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6}},
+		{"/a/b/c", []int{6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5}},
 		{string([]byte{0xff, 0xfe, 0xfd}), []int{15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}},
 	}
 
@@ -341,8 +341,6 @@ func TestGetPartSizeFromIdx(t *testing.T) {
 		partIndex    int
 		expectedSize int64
 	}{
-		// Total size is - 1
-		{-1, 10, 1, -1},
 		// Total size is zero
 		{0, 10, 1, 0},
 		// part size 2MiB, total size 4MiB
@@ -357,7 +355,7 @@ func TestGetPartSizeFromIdx(t *testing.T) {
 	}
 
 	for i, testCase := range testCases {
-		s, err := getPartSizeFromIdx(testCase.totalSize, testCase.partSize, testCase.partIndex)
+		s, err := calculatePartSizeFromIdx(testCase.totalSize, testCase.partSize, testCase.partIndex)
 		if err != nil {
 			t.Errorf("Test %d: Expected to pass but failed. %s", i+1, err)
 		}
@@ -372,18 +370,21 @@ func TestGetPartSizeFromIdx(t *testing.T) {
 		partIndex int
 		err       error
 	}{
-		// partSize is 0, error.
+		// partSize is 0, returns error.
 		{10, 0, 1, errPartSizeZero},
+		// partIndex is 0, returns error.
 		{10, 1, 0, errPartSizeIndex},
+		// Total size is -1, returns error.
+		{-1, 10, 1, errInvalidArgument},
 	}
 
 	for i, testCaseFailure := range testCasesFailure {
-		_, err := getPartSizeFromIdx(testCaseFailure.totalSize, testCaseFailure.partSize, testCaseFailure.partIndex)
+		_, err := calculatePartSizeFromIdx(testCaseFailure.totalSize, testCaseFailure.partSize, testCaseFailure.partIndex)
 		if err == nil {
 			t.Errorf("Test %d: Expected to failed but passed. %s", i+1, err)
 		}
-		if err != nil && errorCause(err) != testCaseFailure.err {
-			t.Errorf("Test %d: Expected err %s, but got %s", i+1, testCaseFailure.err, errorCause(err))
+		if err != nil && errors.Cause(err) != testCaseFailure.err {
+			t.Errorf("Test %d: Expected err %s, but got %s", i+1, testCaseFailure.err, errors.Cause(err))
 		}
 	}
 }
@@ -447,45 +448,4 @@ func TestEvalDisks(t *testing.T) {
 	defer removeRoots(disks)
 	xl := objLayer.(*xlObjects)
 	testShuffleDisks(t, xl)
-}
-
-func testEvalDisks(t *testing.T, xl *xlObjects) {
-	disks := xl.storageDisks
-
-	diskErr := errors.New("some disk error")
-	errs := []error{
-		diskErr, nil, nil, nil,
-		nil, diskErr, nil, nil,
-		diskErr, nil, nil, nil,
-		nil, nil, nil, diskErr,
-	}
-
-	// Test normal setup with some disks
-	// returning errors
-	newDisks := evalDisks(disks, errs)
-	if newDisks[0] != nil ||
-		newDisks[1] != disks[1] ||
-		newDisks[2] != disks[2] ||
-		newDisks[3] != disks[3] ||
-		newDisks[4] != disks[4] ||
-		newDisks[5] != nil ||
-		newDisks[6] != disks[6] ||
-		newDisks[7] != disks[7] ||
-		newDisks[8] != nil ||
-		newDisks[9] != disks[9] ||
-		newDisks[10] != disks[10] ||
-		newDisks[11] != disks[11] ||
-		newDisks[12] != disks[12] ||
-		newDisks[13] != disks[13] ||
-		newDisks[14] != disks[14] ||
-		newDisks[15] != nil {
-		t.Errorf("evalDisks returned incorrect new disk set.")
-	}
-
-	// Test when number of errs doesn't match with number of disks
-	errs = []error{nil, nil, nil, nil}
-	newDisks = evalDisks(disks, errs)
-	if newDisks != nil {
-		t.Errorf("evalDisks returned no nil slice")
-	}
 }

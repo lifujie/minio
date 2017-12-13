@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	errors2 "github.com/minio/minio/pkg/errors"
+	"github.com/minio/minio/pkg/hash"
 	"github.com/minio/minio/pkg/lock"
 )
 
@@ -235,10 +237,13 @@ func prepareFormatXLHealFreshDisks(obj ObjectLayer) ([]StorageAPI, error) {
 
 	bucket := "bucket"
 	object := "object"
-	sha256sum := ""
 
-	_, err = obj.PutObject(bucket, object, int64(len("abcd")), bytes.NewReader([]byte("abcd")), nil, sha256sum)
+	hashReader, err := hash.NewReader(bytes.NewReader([]byte("abcd")), int64(len("abcd")), "", "")
 	if err != nil {
+		return []StorageAPI{}, err
+	}
+
+	if _, err = obj.PutObject(bucket, object, hashReader, nil); err != nil {
 		return []StorageAPI{}, err
 	}
 
@@ -326,9 +331,8 @@ func TestFormatXLHealCorruptedDisks(t *testing.T) {
 
 	bucket := "bucket"
 	object := "object"
-	sha256sum := ""
 
-	_, err = obj.PutObject(bucket, object, int64(len("abcd")), bytes.NewReader([]byte("abcd")), nil, sha256sum)
+	_, err = obj.PutObject(bucket, object, mustGetHashReader(t, bytes.NewReader([]byte("abcd")), int64(len("abcd")), "", ""), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,9 +405,8 @@ func TestFormatXLReorderByInspection(t *testing.T) {
 
 	bucket := "bucket"
 	object := "object"
-	sha256sum := ""
 
-	_, err = obj.PutObject(bucket, object, int64(len("abcd")), bytes.NewReader([]byte("abcd")), nil, sha256sum)
+	_, err = obj.PutObject(bucket, object, mustGetHashReader(t, bytes.NewReader([]byte("abcd")), int64(len("abcd")), "", ""), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +757,7 @@ func TestFSCheckFormatFSErr(t *testing.T) {
 			t.Errorf("Test %d: Should fail with expected %s, got nil", i+1, testCase.formatCheckErr)
 		}
 		if err != nil && !testCase.shouldPass {
-			if errorCause(err).Error() != testCase.formatCheckErr.Error() {
+			if errors2.Cause(err).Error() != testCase.formatCheckErr.Error() {
 				t.Errorf("Test %d: Should fail with expected %s, got %s", i+1, testCase.formatCheckErr, err)
 			}
 		}

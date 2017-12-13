@@ -17,11 +17,11 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/minio/mc/pkg/console"
+	"github.com/minio/minio/pkg/errors"
 )
 
 /*
@@ -70,12 +70,11 @@ import (
 type InitActions int
 
 const (
-	// FormatDisks - see above table for disk states where it
-	// is applicable.
+	// FormatDisks - see above table for disk states where it is applicable.
 	FormatDisks InitActions = iota
 
-	// WaitForHeal - Wait for disks to heal.
-	WaitForHeal
+	// SuggestToHeal - Prints heal message and initialize object layer.
+	SuggestToHeal
 
 	// WaitForQuorum - Wait for quorum number of disks to be online.
 	WaitForQuorum
@@ -134,14 +133,14 @@ func quickErrToActions(errMap map[error]int) InitActions {
 // - Unformatted setup
 //   - Format/Wait for format when `disksUnformatted == diskCount`
 //
-// - Wait for all when `disksUnformatted + disksOffline == disksCount`
+// - Wait for all when `disksUnformatted + disksFormatted + diskOffline == diskCount`
 //
 // Under all other conditions should lead to server initialization aborted.
 func prepForInitXL(firstDisk bool, sErrs []error, diskCount int) InitActions {
 	// Count errors by error value.
 	errMap := make(map[error]int)
 	for _, err := range sErrs {
-		errMap[err]++
+		errMap[errors.Cause(err)]++
 	}
 
 	// Validates and converts specific config errors into WaitForConfig.
@@ -149,7 +148,6 @@ func prepForInitXL(firstDisk bool, sErrs []error, diskCount int) InitActions {
 		return WaitForConfig
 	}
 
-	quorum := diskCount/2 + 1
 	readQuorum := diskCount / 2
 	disksOffline := errMap[errDiskNotFound]
 	disksFormatted := errMap[nil]
@@ -169,28 +167,25 @@ func prepForInitXL(firstDisk bool, sErrs []error, diskCount int) InitActions {
 		return WaitForFormatting
 	}
 
-	// Total disks unformatted are in quorum verify if we have some offline disks.
-	if disksUnformatted >= quorum {
-		// Some disks offline and some disks unformatted, wait for all of them to come online.
-		if disksUnformatted+disksFormatted+disksOffline == diskCount {
-			return WaitForAll
-		}
-
-		// Some disks possibly corrupted and too many unformatted disks.
-		return Abort
-	}
-
 	// Already formatted and in quorum, proceed to initialization of object layer.
 	if disksFormatted >= readQuorum {
 		if disksFormatted+disksOffline == diskCount {
 			return InitObjectLayer
 		}
 
-		// Some of the formatted disks are possibly corrupted or unformatted, heal them.
-		return WaitForHeal
+		// Some of the formatted disks are possibly corrupted or unformatted,
+		// let user know to heal them.
+		return SuggestToHeal
 	}
 
-	// Exhausted all our checks, un-handled errors perhaps we Abort.
+	// Some unformatted, some disks formatted and some disks are offline but we don't
+	// quorum to decide. This is an undecisive state - wait for all of offline disks
+	// to be online to figure out the course of action.
+	if disksUnformatted+disksFormatted+disksOffline == diskCount {
+		return WaitForAll
+	}
+
+	// Exhausted all our checks, un-handled situations such as some disks corrupted we Abort.
 	return Abort
 }
 
@@ -280,7 +275,7 @@ func retryFormattingXLDisks(firstDisk bool, endpoints EndpointList, storageDisks
 					printRegularMsg(endpoints, storageDisks, printOnceFn())
 				}
 				return err
-			case WaitForHeal:
+			case SuggestToHeal:
 				// Validate formats loaded before proceeding forward.
 				err := genericFormatCheckXL(formatConfigs, sErrs)
 				if err == nil {
@@ -301,7 +296,7 @@ func retryFormattingXLDisks(firstDisk bool, endpoints EndpointList, storageDisks
 				console.Printf("Initializing data volume for first time. Waiting for first server to come online (elapsed %s)\n", getElapsedTime())
 			}
 		case <-globalServiceDoneCh:
-			return errors.New("Initializing data volumes gracefully stopped")
+			return fmt.Errorf("Initializing data volumes gracefully stopped")
 		}
 	}
 }
@@ -322,6 +317,22 @@ func initStorageDisks(endpoints EndpointList) ([]StorageAPI, error) {
 	return storageDisks, nil
 }
 
+// Wrap disks into retryable disks.
+func initRetryableStorageDisks(disks []StorageAPI, retryUnit, retryCap time.Duration) (outDisks []StorageAPI) {
+	// Initialize the disk into a retryable-disks wrapper.
+	outDisks = make([]StorageAPI, len(disks))
+	for i, disk := range disks {
+		outDisks[i] = &retryStorage{
+			remoteStorage:    disk,
+			maxRetryAttempts: globalStorageRetryThreshold,
+			retryUnit:        retryUnit,
+			retryCap:         retryCap,
+			offlineTimestamp: UTCNow(), // Set timestamp to prevent immediate marking as offline
+		}
+	}
+	return
+}
+
 // Format disks before initialization of object layer.
 func waitForFormatXLDisks(firstDisk bool, endpoints EndpointList, storageDisks []StorageAPI) (formattedDisks []StorageAPI, err error) {
 	if len(endpoints) == 0 {
@@ -332,39 +343,22 @@ func waitForFormatXLDisks(firstDisk bool, endpoints EndpointList, storageDisks [
 	}
 
 	// Retryable disks before formatting, we need to have a larger
-	// retry window so that we wait enough amount of time before
-	// the disks come online.
-	retryDisks := make([]StorageAPI, len(storageDisks))
-	for i, storage := range storageDisks {
-		retryDisks[i] = &retryStorage{
-			remoteStorage:    storage,
-			maxRetryAttempts: globalStorageInitRetryThreshold,
-			retryUnit:        time.Second,
-			retryCap:         time.Second * 30, // 30 seconds.
-			offlineTimestamp: UTCNow(),
-		}
-	}
+	// retry window (30 seconds, with once-per-second retries) so
+	// that we wait enough amount of time before the disks come
+	// online.
+	retryDisks := initRetryableStorageDisks(storageDisks, time.Second, time.Second*30)
 
-	// Start retry loop retrying until disks are formatted properly, until we have reached
-	// a conditional quorum of formatted disks.
+	// Start retry loop retrying until disks are formatted
+	// properly, until we have reached a conditional quorum of
+	// formatted disks.
 	err = retryFormattingXLDisks(firstDisk, endpoints, retryDisks)
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize the disk into a formatted disks wrapper.
-	formattedDisks = make([]StorageAPI, len(storageDisks))
-	for i, storage := range storageDisks {
-		// After formatting is done we need a smaller time
-		// window and lower retry value before formatting.
-		formattedDisks[i] = &retryStorage{
-			remoteStorage:    storage,
-			maxRetryAttempts: globalStorageRetryThreshold,
-			retryUnit:        time.Millisecond,
-			retryCap:         time.Millisecond * 5, // 5 milliseconds.
-			offlineTimestamp: UTCNow(),             // Set timestamp to prevent immediate marking as offline
-		}
-	}
+	// Initialize the disk into a formatted disks wrapper. This
+	// uses a shorter retry window (5ms with once-per-ms retries)
+	formattedDisks = initRetryableStorageDisks(storageDisks, time.Millisecond, time.Millisecond*5)
 
 	// Success.
 	return formattedDisks, nil

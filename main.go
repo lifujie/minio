@@ -30,11 +30,14 @@ import (
 	version "github.com/hashicorp/go-version"
 	"github.com/minio/mc/pkg/console"
 	minio "github.com/minio/minio/cmd"
+
+	// Import gateway
+	_ "github.com/minio/minio/cmd/gateway"
 )
 
 const (
-	// Minio requires at least Go v1.8.3
-	minGoVersion        = "1.8.3"
+	// Minio requires at least Go v1.9.1
+	minGoVersion        = "1.9.1"
 	goVersionConstraint = ">= " + minGoVersion
 )
 

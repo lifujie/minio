@@ -51,6 +51,26 @@ func validateListObjectsArgs(prefix, marker, delimiter string, maxKeys int) APIE
 	return ErrNone
 }
 
+// Validate all the ListObjectsV2 query arguments, returns an APIErrorCode
+// if one of the args do not meet the required conditions.
+// Special conditions required by Minio server are as below
+// - delimiter if set should be equal to '/', otherwise the request is rejected.
+func validateGatewayListObjectsV2Args(prefix, marker, delimiter string, maxKeys int) APIErrorCode {
+	// Max keys cannot be negative.
+	if maxKeys < 0 {
+		return ErrInvalidMaxKeys
+	}
+
+	/// Minio special conditions for ListObjects.
+
+	// Verify if delimiter is anything other than '/', which we do not support.
+	if delimiter != "" && delimiter != "/" {
+		return ErrNotImplemented
+	}
+
+	return ErrNone
+}
+
 // ListObjectsV2Handler - GET Bucket (List Objects) Version 2.
 // --------------------------
 // This implementation of the GET operation returns some or all (up to 1000)
@@ -69,7 +89,7 @@ func (api objectAPIHandlers) ListObjectsV2Handler(w http.ResponseWriter, r *http
 		return
 	}
 
-	if s3Error := checkRequestAuthType(r, bucket, "s3:ListBucket", serverConfig.GetRegion()); s3Error != ErrNone {
+	if s3Error := checkRequestAuthType(r, bucket, "s3:ListBucket", globalServerConfig.GetRegion()); s3Error != ErrNone {
 		writeErrorResponse(w, s3Error, r.URL)
 		return
 	}
@@ -122,7 +142,7 @@ func (api objectAPIHandlers) ListObjectsV1Handler(w http.ResponseWriter, r *http
 		return
 	}
 
-	if s3Error := checkRequestAuthType(r, bucket, "s3:ListBucket", serverConfig.GetRegion()); s3Error != ErrNone {
+	if s3Error := checkRequestAuthType(r, bucket, "s3:ListBucket", globalServerConfig.GetRegion()); s3Error != ErrNone {
 		writeErrorResponse(w, s3Error, r.URL)
 		return
 	}

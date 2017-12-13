@@ -21,27 +21,9 @@ import (
 	"path"
 	"sync"
 	"time"
+
+	"github.com/minio/minio/pkg/auth"
 )
-
-// Login handler implements JWT login token generator, which upon login request
-// along with username and password is generated.
-func (br *browserPeerAPIHandlers) Login(args *LoginRPCArgs, reply *LoginRPCReply) error {
-	// Validate LoginRPCArgs
-	if err := args.IsValid(); err != nil {
-		return err
-	}
-
-	// Authenticate using JWT.
-	token, err := authenticateWeb(args.Username, args.Password)
-	if err != nil {
-		return err
-	}
-
-	// Return the token.
-	reply.AuthToken = token
-
-	return nil
-}
 
 // SetAuthPeerArgs - Arguments collection for SetAuth RPC call
 type SetAuthPeerArgs struct {
@@ -49,7 +31,7 @@ type SetAuthPeerArgs struct {
 	AuthRPCArgs
 
 	// New credentials that receiving peer should update to.
-	Creds credential
+	Creds auth.Credentials
 }
 
 // SetAuthPeer - Update to new credentials sent from a peer Minio
@@ -69,12 +51,12 @@ func (br *browserPeerAPIHandlers) SetAuthPeer(args SetAuthPeerArgs, reply *AuthR
 	}
 
 	// Update credentials in memory
-	prevCred := serverConfig.SetCredential(args.Creds)
+	prevCred := globalServerConfig.SetCredential(args.Creds)
 
 	// Save credentials to config file
-	if err := serverConfig.Save(); err != nil {
+	if err := globalServerConfig.Save(); err != nil {
 		// Save the current creds when failed to update.
-		serverConfig.SetCredential(prevCred)
+		globalServerConfig.SetCredential(prevCred)
 
 		errorIf(err, "Unable to update the config with new credentials sent from browser RPC.")
 		return err
@@ -84,7 +66,7 @@ func (br *browserPeerAPIHandlers) SetAuthPeer(args SetAuthPeerArgs, reply *AuthR
 }
 
 // Sends SetAuthPeer RPCs to all peers in the Minio cluster
-func updateCredsOnPeers(creds credential) map[string]error {
+func updateCredsOnPeers(creds auth.Credentials) map[string]error {
 	// Get list of peer addresses (from globalS3Peers)
 	peers := []string{}
 	for _, p := range globalS3Peers {
@@ -95,7 +77,7 @@ func updateCredsOnPeers(creds credential) map[string]error {
 	errs := make([]error, len(peers))
 	var wg sync.WaitGroup
 
-	serverCred := serverConfig.GetCredential()
+	serverCred := globalServerConfig.GetCredential()
 	// Launch go routines to send request to each peer in parallel.
 	for ix := range peers {
 		wg.Add(1)

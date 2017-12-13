@@ -25,6 +25,7 @@ import (
 
 	humanize "github.com/dustin/go-humanize"
 	"github.com/fatih/color"
+	"github.com/minio/minio/pkg/auth"
 	miniohttp "github.com/minio/minio/pkg/http"
 )
 
@@ -50,9 +51,8 @@ const (
 	globalMinioModeFS              = "mode-server-fs"
 	globalMinioModeXL              = "mode-server-xl"
 	globalMinioModeDistXL          = "mode-server-distributed-xl"
-	globalMinioModeGatewayAzure    = "mode-gateway-azure"
-	globalMinioModeGatewayS3       = "mode-gateway-s3"
-	globalMinioModeGatewayGCS      = "mode-gateway-gcs"
+	globalMinioModeGatewayPrefix   = "mode-gateway-"
+
 	// Add new global values here.
 )
 
@@ -64,8 +64,13 @@ const (
 	// Limit memory allocation to store multipart data
 	maxFormMemory = int64(5 * humanize.MiByte)
 
-	// The maximum allowed difference between the request generation time and the server processing time
-	globalMaxSkewTime = 15 * time.Minute
+	// The maximum allowed time difference between the incoming request
+	// date and server date during signature verification.
+	globalMaxSkewTime = 15 * time.Minute // 15 minutes skew allowed.
+
+	// Default Read/Write timeouts for each connection.
+	globalConnReadTimeout  = 15 * time.Minute // Timeout after 15 minutes of no data sent by the client.
+	globalConnWriteTimeout = 15 * time.Minute // Timeout after 15 minutes if no data received by the client.
 )
 
 var (
@@ -115,6 +120,9 @@ var (
 	globalHTTPServerErrorCh = make(chan error)
 	globalOSSignalCh        = make(chan os.Signal, 1)
 
+	// Enable HTTP request/response headers and body logging.
+	globalHTTPTrace bool
+
 	// List of admin peers.
 	globalAdminPeers = adminPeers{}
 
@@ -132,21 +140,21 @@ var (
 	// Time when object layer was initialized on start up.
 	globalBootTime time.Time
 
-	globalActiveCred         credential
+	globalActiveCred         auth.Credentials
 	globalPublicCerts        []*x509.Certificate
 	globalXLObjCacheDisabled bool
+
+	globalIsEnvDomainName bool
+	globalDomainName      string // Root domain for virtual host style requests
 	// Add new variable global values here.
 
 	globalListingTimeout   = newDynamicTimeout( /*30*/ 600*time.Second /*5*/, 600*time.Second) // timeout for listing related ops
 	globalObjectTimeout    = newDynamicTimeout( /*1*/ 10*time.Minute /*10*/, 600*time.Second)  // timeout for Object API related ops
 	globalOperationTimeout = newDynamicTimeout(10*time.Minute /*30*/, 600*time.Second)         // default timeout for general ops
 	globalHealingTimeout   = newDynamicTimeout(30*time.Minute /*1*/, 30*time.Minute)           // timeout for healing related ops
-)
 
-var (
-	// Keeps the connection active by waiting for following amount of time.
-	// Primarily used in ListenBucketNotification.
-	globalSNSConnAlive = 5 * time.Second
+	// Keep connection active for clients actively using ListenBucketNotification.
+	globalSNSConnAlive = 5 * time.Second // Send a whitespace every 5 seconds.
 )
 
 // global colors.

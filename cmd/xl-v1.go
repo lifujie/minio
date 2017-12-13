@@ -24,6 +24,7 @@ import (
 
 	humanize "github.com/dustin/go-humanize"
 	"github.com/minio/minio/pkg/disk"
+	"github.com/minio/minio/pkg/errors"
 	"github.com/minio/minio/pkg/objcache"
 )
 
@@ -158,8 +159,15 @@ func newXLObjects(storageDisks []StorageAPI) (ObjectLayer, error) {
 		return xl, nil
 	}
 
-	// Do a quick heal on the buckets themselves for any discrepancies.
-	return xl, quickHeal(xl.storageDisks, xl.writeQuorum, xl.readQuorum)
+	// Perform a quick heal on the buckets and bucket metadata for any discrepancies.
+	if err = quickHeal(xl.storageDisks, xl.writeQuorum, xl.readQuorum); err != nil {
+		return nil, err
+	}
+
+	// Start background process to cleanup old multipart objects in `.minio.sys`.
+	go cleanupStaleMultipartUploads(multipartCleanupInterval, multipartExpiry, xl, xl.listMultipartUploadsCleanup, globalServiceDoneCh)
+
+	return xl, nil
 }
 
 // Shutdown function for object storage interface.
@@ -197,7 +205,7 @@ func getDisksInfo(disks []StorageAPI) (disksInfo []disk.Info, onlineDisks int, o
 		info, err := storageDisk.DiskInfo()
 		if err != nil {
 			errorIf(err, "Unable to fetch disk info for %#v", storageDisk)
-			if isErr(err, baseErrs...) {
+			if errors.IsErr(err, baseErrs...) {
 				offlineDisks++
 				continue
 			}

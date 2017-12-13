@@ -98,7 +98,7 @@ func configureServerHandler(endpoints EndpointList) (http.Handler, error) {
 		// Redirect some pre-defined browser request paths to a static location prefix.
 		setBrowserRedirectHandler,
 		// Validates if incoming request is for restricted buckets.
-		setPrivateBucketHandler,
+		setReservedBucketHandler,
 		// Adds cache control for all browser requests.
 		setBrowserCacheControlHandler,
 		// Validates all incoming requests to have a valid date header.
@@ -112,6 +112,9 @@ func configureServerHandler(endpoints EndpointList) (http.Handler, error) {
 		// routes them accordingly. Client receives a HTTP error for
 		// invalid/unsupported signatures.
 		setAuthHandler,
+		// filters HTTP headers which are treated as metadata and are reserved
+		// for internal use only.
+		filterReservedMetadata,
 		// Add new handlers here.
 	}
 

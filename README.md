@@ -1,4 +1,5 @@
-# Minio Quickstart Guide [![Slack](https://slack.minio.io/slack?type=svg)](https://slack.minio.io) [![Go Report Card](https://goreportcard.com/badge/minio/minio)](https://goreportcard.com/report/minio/minio) [![Docker Pulls](https://img.shields.io/docker/pulls/minio/minio.svg?maxAge=604800)](https://hub.docker.com/r/minio/minio/) [![codecov](https://codecov.io/gh/minio/minio/branch/master/graph/badge.svg)](https://codecov.io/gh/minio/minio)
+# Minio Quickstart Guide
+[![Slack](https://slack.minio.io/slack?type=svg)](https://slack.minio.io) [![Go Report Card](https://goreportcard.com/badge/minio/minio)](https://goreportcard.com/report/minio/minio) [![Docker Pulls](https://img.shields.io/docker/pulls/minio/minio.svg?maxAge=604800)](https://hub.docker.com/r/minio/minio/) [![codecov](https://codecov.io/gh/minio/minio/branch/master/graph/badge.svg)](https://codecov.io/gh/minio/minio) [![Snap Status](https://build.snapcraft.io/badge/minio/minio.svg)](https://build.snapcraft.io/user/minio/minio)
 
 Minio is an object storage server released under Apache License v2.0. It is compatible with Amazon S3 cloud storage service. It is best suited for storing unstructured data such as photos, videos, log files, backups and container / VM images. Size of an object can range from a few KBs to a maximum of 5TB.
 
@@ -21,15 +22,13 @@ Please visit Minio Docker quickstart guide for more [here](https://docs.minio.io
 ## macOS
 ### Homebrew
 Install minio packages using [Homebrew](http://brew.sh/)
-
 ```sh
 brew install minio/stable/minio
-minio server ~/Photos
+minio server /data
 ```
-#### Note
-If you previously installed minio using `brew install minio` then reinstall minio from `minio/stable/minio` official repo. Homebrew builds are unstable due to golang 1.8 bugs.
 
-```
+> NOTE: If you previously installed minio using `brew install minio` then it is recommended that you reinstall minio from `minio/stable/minio` official repo instead.
+```sh
 brew uninstall minio
 brew install minio/stable/minio
 ```
@@ -40,7 +39,7 @@ brew install minio/stable/minio
 |Apple macOS|64-bit Intel|https://dl.minio.io/server/minio/release/darwin-amd64/minio |
 ```sh
 chmod 755 minio
-./minio server ~/Photos
+./minio server /data
 ```
 
 ## GNU/Linux
@@ -50,22 +49,19 @@ chmod 755 minio
 |GNU/Linux|64-bit Intel|https://dl.minio.io/server/minio/release/linux-amd64/minio |
 ```sh
 chmod +x minio
-./minio server ~/Photos
+./minio server /data
 ```
 
 ### Snap
-You can install the latest `minio` [snap](https://snapcraft.io), and help testing the most recent changes of the master branch in [all the supported Linux distros](https://snapcraft.io/docs/core/install) with:
-
+Install minio using [Snap](https://snapcraft.io)
 ```sh
 sudo snap install minio --edge
 ```
 
-Every time a new version of `minio` is pushed to the store, you will get it updated automatically.
-
-You will need to allow the minio snap to observe mounts in the system:
-
+Start minio using `snap run` command
 ```sh
 sudo snap connect minio:mount-observe
+sudo snap run minio server /data
 ```
 
 ## Microsoft Windows
@@ -89,7 +85,6 @@ service minio start
 ```
 
 ## Install from Source
-
 Source installation is only intended for developers and advanced users. If you do not have a working Golang environment, please follow [How to install Golang](https://docs.minio.io/docs/how-to-install-golang).
 
 ```sh

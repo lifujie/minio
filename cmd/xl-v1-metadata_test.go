@@ -26,6 +26,7 @@ import (
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
+	errors2 "github.com/minio/minio/pkg/errors"
 )
 
 // Tests for reading XL object info.
@@ -64,11 +65,10 @@ func testXLReadStat(obj ObjectLayer, instanceType string, disks []string, t *tes
 		// case - 1.
 		{bucketName, objectName, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upkoad the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err = obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err = obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData["etag"], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -94,7 +94,7 @@ func testXLReadStat(obj ObjectLayer, instanceType string, disks []string, t *tes
 	}
 
 	_, _, err = obj.(*xlObjects).readXLMetaStat(bucketName, objectName)
-	if errorCause(err) != errVolumeNotFound {
+	if errors2.Cause(err) != errVolumeNotFound {
 		t.Fatal(err)
 	}
 }
@@ -151,7 +151,7 @@ func testXLReadMetaParts(obj ObjectLayer, instanceType string, disks []string, t
 	sha256sum := ""
 	// Iterating over creatPartCases to generate multipart chunks.
 	for _, testCase := range createPartCases {
-		_, perr := obj.PutObjectPart(testCase.bucketName, testCase.objName, testCase.uploadID, testCase.PartID, testCase.intputDataSize, bytes.NewBufferString(testCase.inputReaderData), testCase.inputMd5, sha256sum)
+		_, perr := obj.PutObjectPart(testCase.bucketName, testCase.objName, testCase.uploadID, testCase.PartID, mustGetHashReader(t, bytes.NewBufferString(testCase.inputReaderData), testCase.intputDataSize, testCase.inputMd5, sha256sum))
 		if perr != nil {
 			t.Fatalf("%s : %s", instanceType, perr)
 		}
@@ -179,7 +179,7 @@ func testXLReadMetaParts(obj ObjectLayer, instanceType string, disks []string, t
 	}
 
 	_, err = obj.(*xlObjects).readXLMetaParts(minioMetaMultipartBucket, uploadIDPath)
-	if errorCause(err) != errFileNotFound {
+	if errors2.Cause(err) != errFileNotFound {
 		t.Fatal(err)
 	}
 }
@@ -298,7 +298,7 @@ func TestObjectToPartOffset(t *testing.T) {
 	// Test them.
 	for _, testCase := range testCases {
 		index, offset, err := xlMeta.ObjectToPartOffset(testCase.offset)
-		err = errorCause(err)
+		err = errors2.Cause(err)
 		if err != testCase.expectedErr {
 			t.Fatalf("%+v: expected = %s, got: %s", testCase, testCase.expectedErr, err)
 		}
@@ -356,7 +356,7 @@ func TestPickValidXLMeta(t *testing.T) {
 	for i, test := range testCases {
 		xlMeta, err := pickValidXLMeta(test.metaArr, test.modTime)
 		if test.expectedErr != nil {
-			if errorCause(err).Error() != test.expectedErr.Error() {
+			if errors2.Cause(err).Error() != test.expectedErr.Error() {
 				t.Errorf("Test %d: Expected to fail with %v but received %v",
 					i+1, test.expectedErr, err)
 			}

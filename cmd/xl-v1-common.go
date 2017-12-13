@@ -16,7 +16,11 @@
 
 package cmd
 
-import "path"
+import (
+	"path"
+
+	"github.com/minio/minio/pkg/errors"
+)
 
 // getLoadBalancedDisks - fetches load balanced (sufficiently randomized) disk slice.
 func (xl xlObjects) getLoadBalancedDisks() (disks []StorageAPI) {
@@ -33,11 +37,11 @@ func (xl xlObjects) getLoadBalancedDisks() (disks []StorageAPI) {
 func (xl xlObjects) parentDirIsObject(bucket, parent string) bool {
 	var isParentDirObject func(string) bool
 	isParentDirObject = func(p string) bool {
-		if p == "." {
+		if p == "." || p == "/" {
 			return false
 		}
 		if xl.isObject(bucket, p) {
-			// If there is already a file at prefix "p" return error.
+			// If there is already a file at prefix "p", return true.
 			return true
 		}
 		// Check if there is a file as one of the parent paths.
@@ -59,7 +63,7 @@ func (xl xlObjects) isObject(bucket, prefix string) (ok bool) {
 			return true
 		}
 		// Ignore for file not found,  disk not found or faulty disk.
-		if isErrIgnored(err, xlTreeWalkIgnoredErrs...) {
+		if errors.IsErrIgnored(err, xlTreeWalkIgnoredErrs...) {
 			continue
 		}
 		errorIf(err, "Unable to stat a file %s/%s/%s", bucket, prefix, xlMetaJSONFile)

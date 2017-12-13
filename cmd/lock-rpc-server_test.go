@@ -57,10 +57,13 @@ func createLockTestServer(t *testing.T) (string, *lockServer, string) {
 			lockMap:         make(map[string][]lockRequesterInfo),
 		},
 	}
-	creds := serverConfig.GetCredential()
+	creds := globalServerConfig.GetCredential()
+	token, err := authenticateNode(creds.AccessKey, creds.SecretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	loginArgs := LoginRPCArgs{
-		Username:    creds.AccessKey,
-		Password:    creds.SecretKey,
+		AuthToken:   token,
 		Version:     Version,
 		RequestTime: UTCNow(),
 	}
@@ -69,8 +72,6 @@ func createLockTestServer(t *testing.T) (string, *lockServer, string) {
 	if err != nil {
 		t.Fatalf("Failed to login to lock server - %v", err)
 	}
-	token := loginReply.AuthToken
-
 	return testPath, locker, token
 }
 

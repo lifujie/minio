@@ -6,7 +6,7 @@ Minio server stores all its configuration data in `${HOME}/.minio/config.json` f
 The default configuration directory is `${HOME}/.minio`. You can override the default configuration directory using `--config-dir` command-line option. Minio server generates a new `config.json` with auto-generated access credentials when its started for the first time.
 
 ```sh
-minio server --config-dir /etc/minio
+minio server --config-dir /etc/minio /data
 ```
 
 ### Certificate Directory
@@ -42,19 +42,19 @@ Example:
 ```sh
 export MINIO_ACCESS_KEY=admin
 export MINIO_SECRET_KEY=password
-minio server ~/Photos
+minio server /data
 ```
 
 #### Region
 |Field|Type|Description|
 |:---|:---|:---|
-|``region``| _string_ | `region` describes the physical location of the server. By default it is set to `us-east-1`, which is same as AWS S3's default region. You may override this field with `MINIO_REGION` environment variable. If you are unsure leave it unset.|
+|``region``| _string_ | `region` describes the physical location of the server. By default it is set to ``. You may override this field with `MINIO_REGION` environment variable. If you are unsure leave it unset.|
 
 Example:
 
 ```sh
 export MINIO_REGION="my_region"
-minio server ~/Photos
+minio server /data
 ```
 
 #### Browser
@@ -66,18 +66,22 @@ Example:
 
 ```sh
 export MINIO_BROWSER=off
-minio server ~/Photos
+minio server /data
 ```
 
-#### Logger
+### Domain
 |Field|Type|Description|
 |:---|:---|:---|
-|``logger ``| |Server logs errors and fatal messages via logger. You may enable one or more loggers at the same time.|
-|``logger.console``| |Send log messages to console.|
-|``logger.console.enable``| _bool_ | Enable or disable console logger. Default is set to _true_.|
-|``logger.file``| |Send log message to a file.|
-|``logger.file.enable``| _bool_ | Enable or disable file logger. Default is set to _false_.|
-|``logger.file.filename``| _string_ | Path and name of the log file. Example: _/var/log/minio.log_ |
+|``domain``| _string_ | Enable virtual-host-style requests i.e http://bucket.mydomain.com/object|
+
+By default, Minio supports path-style requests which look like http://mydomain.com/bucket/object. MINIO_DOMAIN environmental variable (or `domain` in config.json) can be used to enable virtual-host-style requests. If the request `Host` header matches with `(.+).mydomain.com` then the mattched pattern `$1` is used as bucket and the path is used as object. More information on path-style and virtual-host-style [here](http://docs.aws.amazon.com/AmazonS3/latest/dev/RESTAPI.html)
+
+Example:
+
+```sh
+export MINIO_DOMAIN=mydomain.com
+minio server /data
+```
 
 #### Notify
 |Field|Type|Description|

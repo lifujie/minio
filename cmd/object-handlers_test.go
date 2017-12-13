@@ -30,6 +30,7 @@ import (
 	"testing"
 
 	humanize "github.com/dustin/go-humanize"
+	"github.com/minio/minio/pkg/auth"
 )
 
 // Type to capture different modifications to API request to simulate failure cases.
@@ -51,7 +52,7 @@ func TestAPIHeadObjectHandler(t *testing.T) {
 }
 
 func testAPIHeadObjectHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	objectName := "test-object"
 	// set of byte data for PutObject.
 	// object has to be created before running tests for HeadObject.
@@ -72,11 +73,10 @@ func testAPIHeadObjectHandler(obj ObjectLayer, instanceType, bucketName string, 
 	}{
 		{bucketName, objectName, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err := obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err := obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -198,7 +198,7 @@ func TestAPIGetObjectHandler(t *testing.T) {
 }
 
 func testAPIGetObjectHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	objectName := "test-object"
 	// set of byte data for PutObject.
 	// object has to be created before running tests for GetObject.
@@ -220,11 +220,10 @@ func testAPIGetObjectHandler(obj ObjectLayer, instanceType, bucketName string, a
 		// case - 1.
 		{bucketName, objectName, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err := obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err := obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -472,7 +471,7 @@ func TestAPIPutObjectStreamSigV4Handler(t *testing.T) {
 }
 
 func testAPIPutObjectStreamSigV4Handler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	objectName := "test-object"
 	bytesDataLen := 65 * humanize.KiByte
@@ -786,7 +785,7 @@ func TestAPIPutObjectHandler(t *testing.T) {
 }
 
 func testAPIPutObjectHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	// register event notifier.
 	err := initEventNotifier(obj)
@@ -1025,7 +1024,7 @@ func TestAPICopyObjectPartHandlerSanity(t *testing.T) {
 }
 
 func testAPICopyObjectPartHandlerSanity(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	objectName := "test-object"
 	// register event notifier.
@@ -1054,12 +1053,11 @@ func testAPICopyObjectPartHandlerSanity(obj ObjectLayer, instanceType, bucketNam
 		// case - 1.
 		{bucketName, objectName, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err = obj.PutObject(input.bucketName, input.objectName, input.contentLength,
-			bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err = obj.PutObject(input.bucketName, input.objectName,
+			mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -1080,7 +1078,7 @@ func testAPICopyObjectPartHandlerSanity(obj ObjectLayer, instanceType, bucketNam
 
 	a := 0
 	b := globalMinPartSize - 1
-	var parts []completePart
+	var parts []CompletePart
 	for partNumber := 1; partNumber <= 2; partNumber++ {
 		// initialize HTTP NewRecorder, this records any mutations to response writer inside the handler.
 		rec := httptest.NewRecorder()
@@ -1111,7 +1109,7 @@ func testAPICopyObjectPartHandlerSanity(obj ObjectLayer, instanceType, bucketNam
 			t.Fatalf("Test failed to decode XML response: <ERROR> %v", err)
 		}
 
-		parts = append(parts, completePart{
+		parts = append(parts, CompletePart{
 			PartNumber: partNumber,
 			ETag:       canonicalizeETag(resp.ETag),
 		})
@@ -1141,7 +1139,7 @@ func TestAPICopyObjectPartHandler(t *testing.T) {
 }
 
 func testAPICopyObjectPartHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	objectName := "test-object"
 	// register event notifier.
@@ -1170,11 +1168,10 @@ func testAPICopyObjectPartHandler(obj ObjectLayer, instanceType, bucketName stri
 		// case - 1.
 		{bucketName, objectName, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err = obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err = obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -1472,7 +1469,7 @@ func TestAPICopyObjectHandler(t *testing.T) {
 }
 
 func testAPICopyObjectHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	objectName := "test-object"
 	// object used for anonymous HTTP request test.
@@ -1512,11 +1509,10 @@ func testAPICopyObjectHandler(obj ObjectLayer, instanceType, bucketName string, 
 		// used for anonymous HTTP request test.
 		{bucketName, anonObject, int64(len(bytesData[0].byteData)), bytesData[0].byteData, make(map[string]string)},
 	}
-	sha256sum := ""
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err = obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, sha256sum)
+		_, err = obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -1891,7 +1887,7 @@ func TestAPINewMultipartHandler(t *testing.T) {
 }
 
 func testAPINewMultipartHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	objectName := "test-object-new-multipart"
 	rec := httptest.NewRecorder()
@@ -2037,7 +2033,7 @@ func TestAPINewMultipartHandlerParallel(t *testing.T) {
 }
 
 func testAPINewMultipartHandlerParallel(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	// used for storing the uploadID's parsed on concurrent HTTP requests for NewMultipart upload on the same object.
 	testUploads := struct {
 		sync.Mutex
@@ -2097,7 +2093,7 @@ func TestAPICompleteMultipartHandler(t *testing.T) {
 }
 
 func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	var err error
 	// register event notifier.
@@ -2158,27 +2154,27 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 	}
 	// Iterating over creatPartCases to generate multipart chunks.
 	for _, part := range parts {
-		_, err = obj.PutObjectPart(part.bucketName, part.objName, part.uploadID, part.PartID, part.intputDataSize,
-			bytes.NewBufferString(part.inputReaderData), part.inputMd5, "")
+		_, err = obj.PutObjectPart(part.bucketName, part.objName, part.uploadID, part.PartID,
+			mustGetHashReader(t, bytes.NewBufferString(part.inputReaderData), part.intputDataSize, part.inputMd5, ""))
 		if err != nil {
 			t.Fatalf("%s : %s", instanceType, err)
 		}
 	}
 	// Parts to be sent as input for CompleteMultipartUpload.
 	inputParts := []struct {
-		parts []completePart
+		parts []CompletePart
 	}{
 		// inputParts - 0.
 		// Case for replicating ETag mismatch.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: "abcd", PartNumber: 1},
 			},
 		},
 		// inputParts - 1.
 		// should error out with part too small.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: "e2fc714c4727ee9395f324cd2e7f331f", PartNumber: 1},
 				{ETag: "1f7690ebdd9b4caf8fab49ca1757bf27", PartNumber: 2},
 			},
@@ -2186,7 +2182,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		// inputParts - 2.
 		// Case with invalid Part number.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: "e2fc714c4727ee9395f324cd2e7f331f", PartNumber: 10},
 			},
 		},
@@ -2194,7 +2190,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		// Case with valid parts,but parts are unsorted.
 		// Part size greater than 5 MiB.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: validPartMD5, PartNumber: 6},
 				{ETag: validPartMD5, PartNumber: 5},
 			},
@@ -2203,7 +2199,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		// Case with valid part.
 		// Part size greater than 5 MiB.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: validPartMD5, PartNumber: 5},
 				{ETag: validPartMD5, PartNumber: 6},
 			},
@@ -2213,7 +2209,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		// Used for the case of testing for anonymous API request.
 		// Part size greater than 5 MiB.
 		{
-			[]completePart{
+			[]CompletePart{
 				{ETag: validPartMD5, PartNumber: 1},
 				{ETag: validPartMD5, PartNumber: 2},
 			},
@@ -2234,7 +2230,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		bucket    string
 		object    string
 		uploadID  string
-		parts     []completePart
+		parts     []CompletePart
 		accessKey string
 		secretKey string
 		// Expected output of CompleteMultipartUpload.
@@ -2257,13 +2253,13 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 			expectedRespStatus: http.StatusBadRequest,
 		},
 		// Test case - 2.
-		// No parts specified in completePart{}.
+		// No parts specified in CompletePart{}.
 		// Should return ErrMalformedXML in the response body.
 		{
 			bucket:    bucketName,
 			object:    objectName,
 			uploadID:  uploadIDs[0],
-			parts:     []completePart{},
+			parts:     []CompletePart{},
 			accessKey: credentials.AccessKey,
 			secretKey: credentials.SecretKey,
 
@@ -2365,14 +2361,14 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 		var req *http.Request
 		var completeBytes, actualContent []byte
 		// Complete multipart upload parts.
-		completeUploads := &completeMultipartUpload{
+		completeUploads := &CompleteMultipartUpload{
 			Parts: testCase.parts,
 		}
 		completeBytes, err = xml.Marshal(completeUploads)
 		if err != nil {
 			t.Fatalf("Error XML encoding of parts: <ERROR> %s.", err)
 		}
-		// Indicating that all parts are uploaded and initiating completeMultipartUpload.
+		// Indicating that all parts are uploaded and initiating CompleteMultipartUpload.
 		req, err = newTestSignedRequestV4("POST", getCompleteMultipartUploadURL("", bucketName, objectName, testCase.uploadID),
 			int64(len(completeBytes)), bytes.NewReader(completeBytes), testCase.accessKey, testCase.secretKey)
 		if err != nil {
@@ -2404,7 +2400,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 	// Testing for anonymous API request.
 	var completeBytes []byte
 	// Complete multipart upload parts.
-	completeUploads := &completeMultipartUpload{
+	completeUploads := &CompleteMultipartUpload{
 		Parts: inputParts[5].parts,
 	}
 	completeBytes, err = xml.Marshal(completeUploads)
@@ -2430,7 +2426,7 @@ func testAPICompleteMultipartHandler(obj ObjectLayer, instanceType, bucketName s
 	// There is no need to use an existing bucket or valid input for creating the request,
 	// since the `objectLayer==nil`  check is performed before any other checks inside the handlers.
 	// The only aim is to generate an HTTP request in a way that the relevant/registered end point is evoked/called.
-	// Indicating that all parts are uploaded and initiating completeMultipartUpload.
+	// Indicating that all parts are uploaded and initiating CompleteMultipartUpload.
 	nilBucket := "dummy-bucket"
 	nilObject := "dummy-object"
 
@@ -2452,7 +2448,7 @@ func TestAPIAbortMultipartHandler(t *testing.T) {
 }
 
 func testAPIAbortMultipartHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	var err error
 	// register event notifier.
@@ -2513,8 +2509,8 @@ func testAPIAbortMultipartHandler(obj ObjectLayer, instanceType, bucketName stri
 	}
 	// Iterating over createPartCases to generate multipart chunks.
 	for _, part := range parts {
-		_, err = obj.PutObjectPart(part.bucketName, part.objName, part.uploadID, part.PartID, part.intputDataSize,
-			bytes.NewBufferString(part.inputReaderData), part.inputMd5, "")
+		_, err = obj.PutObjectPart(part.bucketName, part.objName, part.uploadID, part.PartID,
+			mustGetHashReader(t, bytes.NewBufferString(part.inputReaderData), part.intputDataSize, part.inputMd5, ""))
 		if err != nil {
 			t.Fatalf("%s : %s", instanceType, err)
 		}
@@ -2621,7 +2617,7 @@ func TestAPIDeleteObjectHandler(t *testing.T) {
 }
 
 func testAPIDeleteObjectHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	// register event notifier.
 	err := initEventNotifier(obj)
@@ -2657,7 +2653,7 @@ func testAPIDeleteObjectHandler(obj ObjectLayer, instanceType, bucketName string
 	// iterate through the above set of inputs and upload the object.
 	for i, input := range putObjectInputs {
 		// uploading the object.
-		_, err = obj.PutObject(input.bucketName, input.objectName, input.contentLength, bytes.NewBuffer(input.textData), input.metaData, "")
+		_, err = obj.PutObject(input.bucketName, input.objectName, mustGetHashReader(t, bytes.NewBuffer(input.textData), input.contentLength, input.metaData[""], ""), input.metaData)
 		// if object upload fails stop the test.
 		if err != nil {
 			t.Fatalf("Put Object case %d:  Error uploading object: <ERROR> %v", i+1, err)
@@ -2788,7 +2784,7 @@ func TestAPIPutObjectPartHandlerPreSign(t *testing.T) {
 }
 
 func testAPIPutObjectPartHandlerPreSign(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	testObject := "testobject"
 	rec := httptest.NewRecorder()
 	req, err := newTestSignedRequestV4("POST", getNewMultipartURL("", bucketName, "testobject"),
@@ -2818,6 +2814,7 @@ func testAPIPutObjectPartHandlerPreSign(obj ObjectLayer, instanceType, bucketNam
 		t.Fatalf("[%s] - Failed to create an unsigned request to put object part for %s/%s <ERROR> %v",
 			instanceType, bucketName, testObject, err)
 	}
+
 	err = preSignV2(req, credentials.AccessKey, credentials.SecretKey, int64(10*60*60))
 	if err != nil {
 		t.Fatalf("[%s] - Failed to presign an unsigned request to put object part for %s/%s <ERROR> %v",
@@ -2854,7 +2851,7 @@ func TestAPIPutObjectPartHandlerStreaming(t *testing.T) {
 }
 
 func testAPIPutObjectPartHandlerStreaming(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	testObject := "testobject"
 	rec := httptest.NewRecorder()
 	req, err := newTestSignedRequestV4("POST", getNewMultipartURL("", bucketName, "testobject"),
@@ -2942,7 +2939,7 @@ func TestAPIPutObjectPartHandler(t *testing.T) {
 }
 
 func testAPIPutObjectPartHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 
 	// Initiate Multipart upload for testing PutObjectPartHandler.
 	testObject := "testobject"
@@ -3259,7 +3256,7 @@ func TestAPIListObjectPartsHandlerPreSign(t *testing.T) {
 }
 
 func testAPIListObjectPartsHandlerPreSign(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	testObject := "testobject"
 	rec := httptest.NewRecorder()
 	req, err := newTestSignedRequestV4("POST", getNewMultipartURL("", bucketName, testObject),
@@ -3306,6 +3303,7 @@ func testAPIListObjectPartsHandlerPreSign(obj ObjectLayer, instanceType, bucketN
 			instanceType, bucketName, mpartResp.UploadID)
 	}
 
+	req.Header = http.Header{}
 	err = preSignV2(req, credentials.AccessKey, credentials.SecretKey, int64(10*60*60))
 	if err != nil {
 		t.Fatalf("[%s] - Failed to presignV2 an unsigned request to list object parts for bucket %s, uploadId %s",
@@ -3346,7 +3344,7 @@ func TestAPIListObjectPartsHandler(t *testing.T) {
 }
 
 func testAPIListObjectPartsHandler(obj ObjectLayer, instanceType, bucketName string, apiRouter http.Handler,
-	credentials credential, t *testing.T) {
+	credentials auth.Credentials, t *testing.T) {
 	testObject := "testobject"
 
 	// PutObjectPart API HTTP Handler has to be tested in isolation,
@@ -3361,8 +3359,7 @@ func testAPIListObjectPartsHandler(obj ObjectLayer, instanceType, bucketName str
 	uploadIDCopy := uploadID
 
 	// create an object Part, will be used to test list object parts.
-	_, err = obj.PutObjectPart(bucketName, testObject, uploadID, 1, int64(len("hello")), bytes.NewReader([]byte("hello")),
-		"5d41402abc4b2a76b9719d911017c592", "")
+	_, err = obj.PutObjectPart(bucketName, testObject, uploadID, 1, mustGetHashReader(t, bytes.NewReader([]byte("hello")), int64(len("hello")), "5d41402abc4b2a76b9719d911017c592", ""))
 	if err != nil {
 		t.Fatalf("Minio %s : %s.", instanceType, err)
 	}

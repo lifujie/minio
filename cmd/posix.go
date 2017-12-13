@@ -113,7 +113,7 @@ func newPosix(path string) (StorageAPI, error) {
 			},
 		},
 	}
-	fi, err := osStat((diskPath))
+	fi, err := os.Stat((diskPath))
 	if err == nil {
 		if !fi.IsDir() {
 			return nil, syscall.ENOTDIR
@@ -249,7 +249,7 @@ func (s *posix) getVolDir(volume string) (string, error) {
 // checkDiskFound - validates if disk is available,
 // returns errDiskNotFound if not found.
 func (s *posix) checkDiskFound() (err error) {
-	_, err = osStat((s.diskPath))
+	_, err = os.Stat((s.diskPath))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errDiskNotFound
@@ -340,7 +340,7 @@ func listVols(dirPath string) ([]VolInfo, error) {
 			continue
 		}
 		var fi os.FileInfo
-		fi, err = osStat((pathJoin(dirPath, entry)))
+		fi, err = os.Stat((pathJoin(dirPath, entry)))
 		if err != nil {
 			// If the file does not exist, skip the entry.
 			if os.IsNotExist(err) {
@@ -350,7 +350,7 @@ func listVols(dirPath string) ([]VolInfo, error) {
 		}
 		volsInfo = append(volsInfo, VolInfo{
 			Name: fi.Name(),
-			// As osStat() doesn't carry other than ModTime(), use
+			// As os.Stat() doesn't carry other than ModTime(), use
 			// ModTime() as CreatedTime.
 			Created: fi.ModTime(),
 		})
@@ -381,14 +381,14 @@ func (s *posix) StatVol(volume string) (volInfo VolInfo, err error) {
 	}
 	// Stat a volume entry.
 	var st os.FileInfo
-	st, err = osStat((volumeDir))
+	st, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return VolInfo{}, errVolumeNotFound
 		}
 		return VolInfo{}, err
 	}
-	// As osStat() doesn't carry other than ModTime(), use ModTime()
+	// As os.Stat() doesn't carry other than ModTime(), use ModTime()
 	// as CreatedTime.
 	createdTime := st.ModTime()
 	return VolInfo{
@@ -453,7 +453,7 @@ func (s *posix) ListDir(volume, dirPath string) (entries []string, err error) {
 		return nil, err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, errVolumeNotFound
@@ -489,7 +489,7 @@ func (s *posix) ReadAll(volume, path string) (buf []byte, err error) {
 		return nil, err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, errVolumeNotFound
@@ -533,25 +533,14 @@ func (s *posix) ReadAll(volume, path string) (buf []byte, err error) {
 // for io.EOF.
 //
 // If an EOF happens after reading some but not all the bytes,
-// ReadFull returns ErrUnexpectedEOF.
+// ReadFile returns ErrUnexpectedEOF.
+//
+// If the BitrotVerifier is not nil or not verified ReadFile
+// tries to verify whether the disk has bitrot.
 //
 // Additionally ReadFile also starts reading from an offset. ReadFile
 // semantics are same as io.ReadFull.
-func (s *posix) ReadFile(volume, path string, offset int64, buf []byte) (n int64, err error) {
-	return s.ReadFileWithVerify(volume, path, offset, buf, &BitrotVerifier{verified: true})
-}
-
-// ReadFileWithVerify is the same as ReadFile but with hashsum
-// verification: the operation will fail if the hash verification
-// fails.
-//
-// The `expectedHash` is the expected hex-encoded hash string for
-// verification. With an empty expected hash string, hash verification
-// is skipped. An empty HashAlgo defaults to `blake2b`.
-//
-// The function takes care to minimize the number of disk read
-// operations.
-func (s *posix) ReadFileWithVerify(volume, path string, offset int64, buffer []byte, verifier *BitrotVerifier) (n int64, err error) {
+func (s *posix) ReadFile(volume, path string, offset int64, buffer []byte, verifier *BitrotVerifier) (n int64, err error) {
 	defer func() {
 		if err == syscall.EIO {
 			atomic.AddInt32(&s.ioErrCount, 1)
@@ -571,7 +560,7 @@ func (s *posix) ReadFileWithVerify(volume, path string, offset int64, buffer []b
 		return 0, err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, errVolumeNotFound
@@ -612,7 +601,7 @@ func (s *posix) ReadFileWithVerify(volume, path string, offset int64, buffer []b
 		return 0, errIsNotRegular
 	}
 
-	if !verifier.IsVerified() {
+	if verifier != nil && !verifier.IsVerified() {
 		bufp := s.pool.Get().(*[]byte)
 		defer s.pool.Put(bufp)
 
@@ -663,7 +652,7 @@ func (s *posix) createFile(volume, path string) (f *os.File, err error) {
 		return nil, err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, errVolumeNotFound
@@ -678,7 +667,7 @@ func (s *posix) createFile(volume, path string) (f *os.File, err error) {
 
 	// Verify if the file already exists and is not of regular type.
 	var st os.FileInfo
-	if st, err = osStat((filePath)); err == nil {
+	if st, err = os.Stat((filePath)); err == nil {
 		if !st.Mode().IsRegular() {
 			return nil, errIsNotRegular
 		}
@@ -805,7 +794,7 @@ func (s *posix) StatFile(volume, path string) (file FileInfo, err error) {
 		return FileInfo{}, err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return FileInfo{}, errVolumeNotFound
@@ -817,7 +806,7 @@ func (s *posix) StatFile(volume, path string) (file FileInfo, err error) {
 	if err = checkPathLength((filePath)); err != nil {
 		return FileInfo{}, err
 	}
-	st, err := osStat((filePath))
+	st, err := os.Stat((filePath))
 	if err != nil {
 		// File is really not found.
 		if os.IsNotExist(err) {
@@ -898,7 +887,7 @@ func (s *posix) DeleteFile(volume, path string) (err error) {
 		return err
 	}
 	// Stat a volume entry.
-	_, err = osStat((volumeDir))
+	_, err = os.Stat((volumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errVolumeNotFound
@@ -942,14 +931,14 @@ func (s *posix) RenameFile(srcVolume, srcPath, dstVolume, dstPath string) (err e
 		return err
 	}
 	// Stat a volume entry.
-	_, err = osStat((srcVolumeDir))
+	_, err = os.Stat((srcVolumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errVolumeNotFound
 		}
 		return err
 	}
-	_, err = osStat((dstVolumeDir))
+	_, err = os.Stat((dstVolumeDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return errVolumeNotFound
@@ -972,7 +961,7 @@ func (s *posix) RenameFile(srcVolume, srcPath, dstVolume, dstPath string) (err e
 	}
 	if srcIsDir {
 		// If source is a directory we expect the destination to be non-existent always.
-		_, err = osStat((dstFilePath))
+		_, err = os.Stat((dstFilePath))
 		if err == nil {
 			return errFileAccessDenied
 		}
